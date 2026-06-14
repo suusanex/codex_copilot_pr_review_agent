@@ -1,10 +1,15 @@
 name: codex_copilot_pr_review_agent
 version: 1.0.0
-description: APM project for codex_copilot_pr_review_agent
+description: Codex and GitHub Copilot PR review remediation workflow package
 author: suusanex
+type: hybrid
+targets:
+  - codex
+  - copilot
+  - agent-skills
 dependencies:
   apm:
-  - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
+    - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
   mcp: []
 includes: auto
 scripts: {}
