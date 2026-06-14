@@ -15,6 +15,13 @@
 - PRコメント:
 - CI/checks:
 
+## GitHub Copilotレビュー未取得時の判断
+
+- Status: 取得済み / 未取得
+- Reason:
+- Decision: ローカルCodexレビューのみで進める / 人間判断へ戻す
+- Human action:
+
 ## レビュー指摘一覧
 
 | ID | Source | Location | Summary | Decision | Reason |
@@ -55,4 +62,3 @@
 ## 人手での作業が必要
 
 - 人手での作業が必要:
-

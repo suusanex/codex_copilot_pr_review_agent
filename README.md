@@ -51,6 +51,14 @@ pr: 123
 out: .review/pr-123
 ```
 
+## GitHub Copilotレビューの前提
+
+このMVPは、GitHub上に投稿済みのPRレビュー、PRコメント、レビューコメントを読み取る。スクリプトから `@copilot` へのレビューリクエストは行わない。
+
+- Copilot自動レビューが有効なリポジトリでは、レビュー完了を待ってから収集する。
+- 自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。
+- Copilotレビューが見つからない場合は「未取得」として扱い、`review-plan.md` でローカルCodexレビューのみで進めるか、人間判断へ戻すかを明記する。
+
 ## 必要な環境
 
 - GitHub CLI
@@ -72,6 +80,14 @@ apm --version
 - GitHub CLIの取得に失敗した場合、フォールバック推測は行わない。
 - commit/push は、未コミット変更、テスト結果、対象リポジトリのルール、上位指示を確認してから行う。
 - GitHub Copilotレビューが取得できない場合は、未取得としてレポートする。
+
+## MVP完了条件
+
+- 別リポジトリまたはscratch rootへAPM導入できる。
+- `codex-copilot-pr-review-agent` skillが展開される。
+- skill配下の `scripts/`、`templates/`、`references/` が `SKILL.md` からの相対パスで解決できる。
+- GitHub CLI前提チェックが期待通り成功または失敗する。
+- 安全なテストPRでPR情報収集まで実行できる。
 
 ## ドキュメント
 

@@ -33,9 +33,19 @@
 ## 安全性
 
 - 収集CLIは読み取り系GitHub CLI操作だけを実行する。
+- 収集CLIはGitHub上に投稿済みのレビュー情報だけを読む。`@copilot` へのレビューリクエストは行わない。
 - 取得失敗時にフォールバック推測を行わない。
 - 実装agentは `review-plan.md` の範囲外を変更しない。
 - commit/push は検証後のゲートとして扱う。
+
+## MVP完了条件
+
+- 別リポジトリまたはscratch rootへAPM導入できる。
+- `codex-copilot-pr-review-agent` skillが展開される。
+- skill配下の `scripts/`、`templates/`、`references/` が `SKILL.md` からの相対パスで解決できる。
+- GitHub CLI前提チェックが期待通り成功または失敗する。
+- 安全なテストPRでPR本文、レビュー、コメントの収集まで実行できる。
+- Copilotレビューが未取得の場合は、`review-plan.md` に未取得時の判断が記録される。
 
 ## 初版で扱わないもの
 
@@ -45,8 +55,8 @@
 - 組織全体展開機能
 - ダッシュボード
 - 複雑なマルチPR制御
+- `@copilot` レビューリクエストの自動送信
 
 ## 独自実装の理由
 
 PR文脈収集はGitHub CLIで取得できる情報の整形が主目的であり、BCLの `System.Diagnostics.Process` と `System.Text.Json` で十分に実装できる。追加のOSSは導入せず、配布時の依存と認証面を単純に保つ。
-
