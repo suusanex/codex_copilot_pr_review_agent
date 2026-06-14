@@ -24,7 +24,7 @@ try
     var outputDirectory = Path.GetFullPath(options.OutputDirectory);
     Directory.CreateDirectory(outputDirectory);
 
-    var prView = RunGh(
+    var prView = await RunGhAsync(
         "pr",
         "view",
         options.PullRequestNumber.ToString(),
@@ -33,15 +33,16 @@ try
         "--json",
         "number,title,state,author,body,url,headRefName,baseRefName,mergeable,isDraft,reviewDecision,latestReviews,comments,commits,files");
 
-    var reviewComments = RunGh(
+    var reviewComments = await RunGhAsync(
         "api",
         $"repos/{options.Owner}/{options.Name}/pulls/{options.PullRequestNumber}/comments",
-        "--paginate");
+        "--paginate",
+        "--slurp");
 
     string? checks = null;
     if (options.IncludeChecks)
     {
-        checks = RunGh(
+        checks = await RunGhAsync(
             "pr",
             "checks",
             options.PullRequestNumber.ToString(),
@@ -52,7 +53,8 @@ try
     }
 
     using var prViewJson = JsonDocument.Parse(prView);
-    using var reviewCommentsJson = JsonDocument.Parse(reviewComments);
+    var normalizedReviewComments = NormalizePaginatedJsonArray(reviewComments);
+    using var reviewCommentsJson = JsonDocument.Parse(normalizedReviewComments);
     using var checksJson = checks is null ? null : JsonDocument.Parse(checks);
 
     var context = new Dictionary<string, object?>
@@ -170,7 +172,7 @@ static void ValidateOptions(Options options)
     options.Name = parts[1];
 }
 
-static string RunGh(params string[] arguments)
+static async Task<string> RunGhAsync(params string[] arguments)
 {
     var startInfo = new ProcessStartInfo
     {
@@ -189,9 +191,11 @@ static string RunGh(params string[] arguments)
     }
 
     using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start gh.");
-    var output = process.StandardOutput.ReadToEnd();
-    var error = process.StandardError.ReadToEnd();
-    process.WaitForExit();
+    var outputTask = process.StandardOutput.ReadToEndAsync();
+    var errorTask = process.StandardError.ReadToEndAsync();
+    await process.WaitForExitAsync();
+    var output = await outputTask;
+    var error = await errorTask;
 
     if (process.ExitCode != 0)
     {
@@ -199,6 +203,46 @@ static string RunGh(params string[] arguments)
     }
 
     return output;
+}
+
+static string NormalizePaginatedJsonArray(string json)
+{
+    using var document = JsonDocument.Parse(json);
+    var root = document.RootElement;
+    if (root.ValueKind != JsonValueKind.Array)
+    {
+        throw new InvalidOperationException("Expected gh api --paginate --slurp to return a JSON array.");
+    }
+
+    using var stream = new MemoryStream();
+    using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+    {
+        writer.WriteStartArray();
+        foreach (var page in root.EnumerateArray())
+        {
+            if (page.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in page.EnumerateArray())
+                {
+                    item.WriteTo(writer);
+                }
+
+                continue;
+            }
+
+            if (page.ValueKind == JsonValueKind.Object)
+            {
+                page.WriteTo(writer);
+                continue;
+            }
+
+            throw new InvalidOperationException("Expected each paginated gh api page to be a JSON array or object.");
+        }
+
+        writer.WriteEndArray();
+    }
+
+    return Encoding.UTF8.GetString(stream.ToArray());
 }
 
 static string BuildMarkdown(Options options, JsonElement prView, JsonElement reviewComments, JsonElement? checks)
