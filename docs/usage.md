@@ -70,6 +70,12 @@ dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <tar
 dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root> --check-only
 ```
 
+別のカレントディレクトリから実行する場合は、スクリプトをフルパスで指定できる。
+
+```powershell
+dotnet run --file D:\path\to\codex_copilot_pr_review_agent\scripts\install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root> --dry-run
+```
+
 `--dry-run` で反映予定を、`--check-only` で不足を確認した後、通常実行を行う。
 
 ```powershell

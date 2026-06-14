@@ -35,6 +35,12 @@ apm install suusanex/codex_copilot_pr_review_agent
 dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root>
 ```
 
+別のカレントディレクトリから実行する場合は、スクリプトをフルパスで指定できる。
+
+```powershell
+dotnet run --file D:\path\to\codex_copilot_pr_review_agent\scripts\install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root>
+```
+
 `--dry-run` / `--check-only` を付けると、反映内容や不足を事前確認できる。
 
 導入後、対象リポジトリの `AGENTS.md`、README、ビルド手順、テスト手順を優先して運用する。

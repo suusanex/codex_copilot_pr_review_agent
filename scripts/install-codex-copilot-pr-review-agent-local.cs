@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 const string PackageName = "codex-copilot-pr-review-agent";
@@ -47,7 +48,7 @@ if (!Directory.Exists(targetRepoRoot))
     return 2;
 }
 
-var packageRoot = ResolvePackageRoot(options.PackageRoot);
+var packageRoot = ResolvePackageRoot(options.PackageRoot, GetSourceFilePath());
 if (packageRoot is null)
 {
     Console.WriteLine("Error: package source was not found.");
@@ -237,7 +238,12 @@ static void ShowUsage()
     Console.WriteLine("  --help, -h              Show this help.");
 }
 
-static string? ResolvePackageRoot(string? overrideRoot)
+static string GetSourceFilePath([CallerFilePath] string path = "")
+{
+    return path;
+}
+
+static string? ResolvePackageRoot(string? overrideRoot, string sourceFilePath)
 {
     if (!string.IsNullOrWhiteSpace(overrideRoot))
     {
@@ -245,18 +251,38 @@ static string? ResolvePackageRoot(string? overrideRoot)
         return IsPackageRoot(explicitRoot) ? explicitRoot : null;
     }
 
-    var current = new DirectoryInfo(Path.GetFullPath(Directory.GetCurrentDirectory()));
-    while (current is not null)
+    var candidates = new List<string>();
+    if (!string.IsNullOrWhiteSpace(sourceFilePath))
     {
-        if (IsPackageRoot(current.FullName))
-        {
-            return Path.GetFullPath(current.FullName);
-        }
+        AddPackageRootCandidates(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath)), candidates);
+    }
 
-        current = current.Parent;
+    AddPackageRootCandidates(Path.GetFullPath(Directory.GetCurrentDirectory()), candidates);
+
+    foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (IsPackageRoot(candidate))
+        {
+            return Path.GetFullPath(candidate);
+        }
     }
 
     return null;
+}
+
+static void AddPackageRootCandidates(string? startDirectory, List<string> candidates)
+{
+    if (string.IsNullOrWhiteSpace(startDirectory))
+    {
+        return;
+    }
+
+    var current = new DirectoryInfo(startDirectory);
+    while (current is not null)
+    {
+        candidates.Add(current.FullName);
+        current = current.Parent;
+    }
 }
 
 static bool IsPackageRoot(string dir)
