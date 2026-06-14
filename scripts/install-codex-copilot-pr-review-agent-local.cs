@@ -9,6 +9,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 
 const string PackageName = "codex-copilot-pr-review-agent";
+const string InstallerScriptName = "install-codex-copilot-pr-review-agent-local.cs";
 const string LocalReviewerName = "local-reviewer";
 const string ReviewPlannerName = "review-planner";
 const string SparkImplementerName = "spark-implementer";
@@ -58,14 +59,14 @@ if (packageRoot is null)
 
 var sourceAgentMarkdownDir = Path.Combine(packageRoot, ".apm", "agents");
 var sourceSkill = Path.Combine(packageRoot, ".apm", "skills", PackageName);
-var sourceInstallerScript = Path.Combine(packageRoot, "scripts", "install-codex-copilot-pr-review-agent-local.cs");
 var sourceSkillScript = Path.Combine(sourceSkill, "scripts");
+var sourceInstallerScript = ResolveInstallerScript(packageRoot, sourceSkillScript);
 
 if (!Directory.Exists(sourceAgentMarkdownDir)
     || !HasRequiredAgentMarkdowns(sourceAgentMarkdownDir)
     || !Directory.Exists(sourceSkill)
     || !Directory.Exists(sourceSkillScript)
-    || !File.Exists(sourceInstallerScript))
+    || string.IsNullOrWhiteSpace(sourceInstallerScript))
 {
     Console.WriteLine("Error: required package inputs are missing.");
     return 2;
@@ -98,6 +99,7 @@ try
         options.DryRun,
         options.CheckOnly,
         options.Force,
+        InstallerScriptName,
         logs,
         blockers);
 
@@ -391,9 +393,11 @@ static void CopyTomlAgentsFromMarkdown(
 
         var targetText = File.ReadAllText(targetPath);
         var targetValues = ParseTomlValues(targetText);
-        ValidateTopLevelKeys(sourceValues, targetValues, display, force, dryRun, checkOnly, logs, blockers);
+        var missingOrDifferent = sourceValues
+            .Where(item => !targetValues.TryGetValue(item.Key, out var targetValue) || !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+            .ToList();
 
-        if (Normalize(sourceText) == Normalize(targetText))
+        if (missingOrDifferent.Count == 0)
         {
             logs.Add($"{display}: no change");
             continue;
@@ -401,24 +405,38 @@ static void CopyTomlAgentsFromMarkdown(
 
         if (!force)
         {
-            blockers.Add($"{display}: file differs. Run with --force to overwrite.");
+            foreach (var item in missingOrDifferent)
+            {
+                blockers.Add($"{display}: top-level `{item.Key}` is `{(targetValues.TryGetValue(item.Key, out var value) ? value : "missing")}`, expected `{item.Value}`");
+            }
+
             continue;
         }
 
         if (checkOnly)
         {
-            blockers.Add($"{display}: overwrite is required. Run with --force.");
+            blockers.Add($"{display}: top-level values update is required. Run with --force.");
             continue;
         }
 
         if (dryRun)
         {
-            logs.Add($"[dry-run] {display}: overwrite");
+            logs.Add($"[dry-run] {display}: update top-level values");
             continue;
         }
 
-        WriteOrDryRun(sourceText, targetPath, dryRun, $"{display}: overwrite", logs);
-        logs.Add($"{display}: overwritten");
+        var mergedText = MergeTomlContent(targetText, sourceValues);
+        if (Normalize(mergedText) == Normalize(targetText))
+        {
+            logs.Add($"{display}: no change");
+            continue;
+        }
+
+        WriteOrDryRun(mergedText, targetPath, dryRun, $"{display}: update top-level values", logs);
+        if (!dryRun)
+        {
+            logs.Add($"{display}: updated");
+        }
     }
 }
 
@@ -428,6 +446,7 @@ static void CopySkillDirectory(
     bool dryRun,
     bool checkOnly,
     bool force,
+    string excludeRelativeFileName,
     List<string> logs,
     List<string> blockers)
 {
@@ -436,6 +455,11 @@ static void CopySkillDirectory(
     {
         var relative = Path.GetRelativePath(sourceSkillDir, sourcePath);
         var normalizedRelative = relative.Replace(Path.DirectorySeparatorChar, '/');
+        if (string.Equals(normalizedRelative, $"scripts/{excludeRelativeFileName}", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
         var targetPath = Path.Combine(targetDir, relative);
         CopySingleFile(
             sourcePath,
@@ -460,19 +484,19 @@ static void CopySingleFile(
     List<string> blockers)
 {
     var sourceText = File.ReadAllText(sourcePath);
-        if (!File.Exists(targetPath))
+    if (!File.Exists(targetPath))
+    {
+        if (checkOnly)
         {
-            if (checkOnly)
-            {
-                blockers.Add($"{displayPath}: file is missing");
-                return;
-            }
+            blockers.Add($"{displayPath}: file is missing");
+            return;
+        }
 
-            WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: add", logs);
-            if (!dryRun)
-            {
-                logs.Add($"{displayPath}: added");
-            }
+        WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: add", logs);
+        if (!dryRun)
+        {
+            logs.Add($"{displayPath}: added");
+        }
 
         return;
     }
@@ -521,39 +545,6 @@ static void WriteOrDryRun(string content, string targetPath, bool dryRun, string
     }
 
     File.WriteAllText(targetPath, content, Encoding.UTF8);
-}
-
-static void ValidateTopLevelKeys(
-    Dictionary<string, string> sourceValues,
-    Dictionary<string, string> targetValues,
-    string display,
-    bool force,
-    bool dryRun,
-    bool checkOnly,
-    List<string> logs,
-    List<string> blockers)
-{
-    var missingOrDifferent = sourceValues
-        .Where(item => !targetValues.TryGetValue(item.Key, out var targetValue) || !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
-        .Select(item => item)
-        .ToList();
-
-    if (missingOrDifferent.Count == 0)
-    {
-        return;
-    }
-
-    if (force && !dryRun && !checkOnly)
-    {
-        var prefix = string.Join(", ", missingOrDifferent.Select(kv => $"`{kv.Key}`"));
-        logs.Add($"[repair] {display}: top-level keys need correction ({prefix})");
-        return;
-    }
-
-    foreach (var item in missingOrDifferent)
-    {
-        blockers.Add($"{display}: top-level `{item.Key}` is `{(targetValues.TryGetValue(item.Key, out var value) ? value : "missing")}`, expected `{item.Value}`");
-    }
 }
 
 static AgentDefinition ParseAgentMarkdown(string path)
@@ -759,6 +750,23 @@ static bool IsTopLevelAssignment(string line, string key)
 static string Normalize(string text)
 {
     return text.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+}
+
+static string? ResolveInstallerScript(string packageRoot, string sourceSkillScriptDir)
+{
+    var sourceInPackageScripts = Path.Combine(packageRoot, "scripts", InstallerScriptName);
+    if (File.Exists(sourceInPackageScripts))
+    {
+        return sourceInPackageScripts;
+    }
+
+    var sourceInSkillScripts = Path.Combine(sourceSkillScriptDir, InstallerScriptName);
+    if (File.Exists(sourceInSkillScripts))
+    {
+        return sourceInSkillScripts;
+    }
+
+    return null;
 }
 
 sealed class InstallOptions
