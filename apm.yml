@@ -1,0 +1,10 @@
+name: codex_copilot_pr_review_agent
+version: 1.0.0
+description: APM project for codex_copilot_pr_review_agent
+author: suusanex
+dependencies:
+  apm:
+  - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
+  mcp: []
+includes: auto
+scripts: {}
