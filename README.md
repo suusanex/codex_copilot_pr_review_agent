@@ -1,0 +1,2 @@
+# codex_copilot_pr_review_agent
+Codexを入り口として、PRを作成してCodexとGitHubCopilotでレビューし、その結果を反映する、という一連の処理を行うカスタムエージェント
