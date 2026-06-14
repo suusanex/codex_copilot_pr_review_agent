@@ -1,6 +1,7 @@
 ---
 name: review-planner
 description: Collect and consolidate Codex and GitHub Copilot PR review findings into a bounded remediation plan without editing files.
+model: gpt-5.5
 # Copyright (c) 2026 suusanex (GitHub UserName)
 # SPDX-License-Identifier: CC-BY-4.0
 # License: https://creativecommons.org/licenses/by/4.0/

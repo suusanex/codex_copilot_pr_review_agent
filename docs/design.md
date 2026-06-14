@@ -10,10 +10,14 @@
 
 - `.agents/skills/codex-copilot-pr-review-agent/SKILL.md`
   - 利用者向け入口ワークフロー。
+- `.github/agents/local-reviewer.agent.md`
+  - `model: "gpt-5.5"` を必須指定する読み取り専用のローカルCodexレビューagent。
 - `.github/agents/review-planner.agent.md`
-  - 読み取り専用のレビュー統合計画agent。
+  - `model: "gpt-5.5"` を必須指定する読み取り専用のレビュー統合計画agent。
 - `.github/agents/spark-implementer.agent.md`
-  - 計画範囲だけを実装するagent。
+  - `model: "gpt-5.3-codex-spark"` を必須指定し、計画範囲だけを実装するagent。
+- `scripts/install-codex-copilot-pr-review-agent-local.cs`
+  - `.agent.md` front matterを原本として、対象リポジトリの `.codex/config.toml` と `.codex/agents/*.toml` を生成・更新するFile-based app。
 - `scripts/collect-pr-review-context.cs`
   - GitHub CLIからPR文脈を収集するFile-based app。
 - `templates/review-plan.md`
@@ -25,10 +29,21 @@
 
 1. GitHub CLIでPR本文、レビュー、コメント、必要に応じてチェック状態を取得する。
 2. `review-context.md` と `review-context.json` を生成する。
-3. Codexローカルレビュー結果と収集結果を `review-planner` に渡す。
-4. `review-planner` が `review-plan.md` を作成する。
-5. `spark-implementer` が計画範囲を実装する。
-6. 検証結果とcommit/push結果を `review-result-report.md` に記録する。
+3. `local-reviewer` がローカルCodexレビュー結果を作成する。
+4. ローカルCodexレビュー結果と収集結果を `review-planner` に渡す。
+5. `review-planner` が `review-plan.md` を作成する。
+6. `spark-implementer` が計画範囲を実装する。
+7. 検証結果とcommit/push結果を `review-result-report.md` に記録する。
+
+## 必須モデル指定
+
+各agentには、次の `model` 指定を必ず記載する。
+
+- `local-reviewer`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
+- `review-planner`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
+- `spark-implementer`: `model = "gpt-5.3-codex-spark"`
+
+このリポジトリで管理する原本は `.github/agents/*.agent.md` と `.apm/agents/*.agent.md` のfront matterである。`.codex/config.toml` と `.codex/agents/*.toml` は、インストーラが対象リポジトリへ生成・更新する配布先設定として扱う。
 
 ## 安全性
 
@@ -42,6 +57,7 @@
 
 - 別リポジトリまたはscratch rootへAPM導入できる。
 - `codex-copilot-pr-review-agent` skillが展開される。
+- `local-reviewer`、`review-planner`、`spark-implementer` が展開され、それぞれに必須の `model` が指定される。
 - skill配下の `scripts/`、`templates/`、`references/` が `SKILL.md` からの相対パスで解決できる。
 - GitHub CLI前提チェックが期待通り成功または失敗する。
 - 安全なテストPRでPR本文、レビュー、コメントの収集まで実行できる。

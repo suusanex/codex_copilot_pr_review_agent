@@ -1,6 +1,7 @@
 ---
 name: spark-implementer
 description: Implement only the approved review remediation plan, run repository checks, and prepare commit/push/report evidence.
+model: gpt-5.3-codex-spark
 # Copyright (c) 2026 suusanex (GitHub UserName)
 # SPDX-License-Identifier: CC-BY-4.0
 # License: https://creativecommons.org/licenses/by/4.0/

@@ -32,12 +32,21 @@ disable-model-invocation: false
 1. 対象リポジトリ、ブランチ、PR番号、未コミット変更の有無を確認する。
 2. PRがない場合は、対象リポジトリのルールに従ってPRを作成または作成手順を確認する。
 3. `scripts/collect-pr-review-context.cs` を使い、PR本文、レビュー、コメント、必要に応じてチェック状態を収集する。
-4. ローカルCodexレビューを実施し、収集結果と合わせて `review-planner` に渡す。
-5. `review-planner` はファイルを変更せず、適用可否、重複コメント、修正順序、検証方針を含む `review-plan.md` を作成する。
-6. `spark-implementer` は `review-plan.md` の範囲だけを実装する。
-7. 対象リポジトリの関連テスト、lint、format、型チェックを可能な範囲で実行する。
-8. 変更内容、検証結果、人手で必要な作業を `review-result-report.md` にまとめる。
-9. commit/push は、未コミット変更、テスト結果、対象リポジトリのルール、上位指示を確認してから実施する。
+4. `local-reviewer` は必須モデル `gpt-5.5`、必須推論設定 `medium` でローカルCodexレビューを作成する。
+5. ローカルCodexレビュー結果と収集結果を `review-planner` に渡す。
+6. `review-planner` は必須モデル `gpt-5.5`、必須推論設定 `medium` で、ファイルを変更せず、適用可否、重複コメント、修正順序、検証方針を含む `review-plan.md` を作成する。
+7. `spark-implementer` は必須モデル `gpt-5.3-codex-spark` で、`review-plan.md` の範囲だけを実装する。
+8. 対象リポジトリの関連テスト、lint、format、型チェックを可能な範囲で実行する。
+9. 変更内容、検証結果、人手で必要な作業を `review-result-report.md` にまとめる。
+10. commit/push は、未コミット変更、テスト結果、対象リポジトリのルール、上位指示を確認してから実施する。
+
+## 必須モデル指定
+
+このワークフローでは、次のagent設定に `model` を必ず指定します。
+
+- `local-reviewer`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
+- `review-planner`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
+- `spark-implementer`: `model = "gpt-5.3-codex-spark"`
 
 ## 補助CLI
 

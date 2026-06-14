@@ -49,6 +49,9 @@ apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target cod
 確認対象:
 
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/SKILL.md`
+- `<scratch>/.codex/agents/local-reviewer.toml`
+- `<scratch>/.codex/agents/review-planner.toml`
+- `<scratch>/.codex/agents/spark-implementer.toml`
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/scripts/collect-pr-review-context.cs`
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/templates/review-plan.md`
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/templates/review-result-report.md`
@@ -57,6 +60,12 @@ apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target cod
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/references/troubleshooting.md`
 
 ファイルが不足している場合は、APMパッケージの `apm pack --dry-run -v` でskill配下の `scripts/`、`templates/`、`references/` がpack対象に含まれるか確認する。
+
+agentが存在してもモデル指定がない場合は、各 `.agent.md` のfront matterに次の `model` が存在するか確認する。`.codex/agents/*.toml` はインストーラで生成されるため、`model_reasoning_effort` と `sandbox_mode` はインストーラ実行後の `.codex/agents/*.toml` で確認する。
+
+- `local-reviewer`: front matter `model: gpt-5.5`
+- `review-planner`: front matter `model: gpt-5.5`
+- `spark-implementer`: front matter `model: gpt-5.3-codex-spark`
 
 ## commit/pushしないで止まる
 
