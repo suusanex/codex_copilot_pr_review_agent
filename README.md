@@ -67,9 +67,9 @@ out: .review/pr-123
 
 - `local-reviewer`: `GPT 5.5 Medium`
 - `review-planner`: `GPT 5.5 Medium`
-- `spark-implementer`: `GPT-5.3-Codex-Spark`
+- `spark-implementer`: `GPT-5.3-Codex-Spark High`
 
-Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` で指定する。`GPT-5.3-Codex-Spark` は `model = "gpt-5.3-codex-spark"` で指定する。
+Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` で指定する。`GPT-5.3-Codex-Spark High` は `model = "gpt-5.3-codex-spark"` と `model_reasoning_effort = "high"` で指定する。
 
 このリポジトリでは `.github/agents/*.agent.md` と `.apm/agents/*.agent.md` のfront matterをモデル指定の原本とする。`.codex/config.toml` と `.codex/agents/*.toml` は、インストーラが対象リポジトリへ生成・更新する配布先設定である。
 

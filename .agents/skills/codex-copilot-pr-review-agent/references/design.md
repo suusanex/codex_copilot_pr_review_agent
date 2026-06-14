@@ -41,7 +41,7 @@
 
 - `local-reviewer`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
 - `review-planner`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
-- `spark-implementer`: `model = "gpt-5.3-codex-spark"`
+- `spark-implementer`: `model = "gpt-5.3-codex-spark"`、`model_reasoning_effort = "high"`
 
 このリポジトリで管理する原本は `.github/agents/*.agent.md` と `.apm/agents/*.agent.md` のfront matterである。`.codex/config.toml` と `.codex/agents/*.toml` は、インストーラが対象リポジトリへ生成・更新する配布先設定として扱う。
 

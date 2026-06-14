@@ -596,7 +596,12 @@ static string BuildAgentToml(AgentDefinition agent)
 
 static string? GetModelReasoningEffort(string agentName)
 {
-    return agentName is LocalReviewerName or ReviewPlannerName ? "medium" : null;
+    return agentName switch
+    {
+        LocalReviewerName or ReviewPlannerName => "medium",
+        SparkImplementerName => "high",
+        _ => null,
+    };
 }
 
 static string GetSandboxMode(string agentName)

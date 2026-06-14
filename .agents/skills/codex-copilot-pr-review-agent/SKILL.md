@@ -35,7 +35,7 @@ disable-model-invocation: false
 4. `local-reviewer` は必須モデル `gpt-5.5`、必須推論設定 `medium` でローカルCodexレビューを作成する。
 5. ローカルCodexレビュー結果と収集結果を `review-planner` に渡す。
 6. `review-planner` は必須モデル `gpt-5.5`、必須推論設定 `medium` で、ファイルを変更せず、適用可否、重複コメント、修正順序、検証方針を含む `review-plan.md` を作成する。
-7. `spark-implementer` は必須モデル `gpt-5.3-codex-spark` で、`review-plan.md` の範囲だけを実装する。
+7. `spark-implementer` は必須モデル `gpt-5.3-codex-spark`、必須推論設定 `high` で、`review-plan.md` の範囲だけを実装する。
 8. 対象リポジトリの関連テスト、lint、format、型チェックを可能な範囲で実行する。
 9. 変更内容、検証結果、人手で必要な作業を `review-result-report.md` にまとめる。
 10. commit/push は、未コミット変更、テスト結果、対象リポジトリのルール、上位指示を確認してから実施する。
@@ -46,7 +46,7 @@ disable-model-invocation: false
 
 - `local-reviewer`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
 - `review-planner`: `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`
-- `spark-implementer`: `model = "gpt-5.3-codex-spark"`
+- `spark-implementer`: `model = "gpt-5.3-codex-spark"`、`model_reasoning_effort = "high"`
 
 ## 補助CLI
 

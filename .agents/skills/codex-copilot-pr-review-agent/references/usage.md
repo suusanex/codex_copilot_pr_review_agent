@@ -25,9 +25,9 @@
 
 - `local-reviewer`: `GPT 5.5 Medium`
 - `review-planner`: `GPT 5.5 Medium`
-- `spark-implementer`: `GPT-5.3-Codex-Spark`
+- `spark-implementer`: `GPT-5.3-Codex-Spark High`
 
-Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` で指定する。`GPT-5.3-Codex-Spark` は `model = "gpt-5.3-codex-spark"` で指定する。
+Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` で指定する。`GPT-5.3-Codex-Spark High` は `model = "gpt-5.3-codex-spark"` と `model_reasoning_effort = "high"` で指定する。
 
 モデル指定の原本は `.github/agents/*.agent.md` と `.apm/agents/*.agent.md` のfront matterである。`.codex/config.toml` と `.codex/agents/*.toml` は、インストーラが対象リポジトリに生成・更新する。
 
@@ -87,7 +87,7 @@ apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target cod
 - インストーラ実行後、対象リポジトリの `.codex/config.toml` に `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` が存在する。
 - インストーラ実行後、対象リポジトリの `.codex/agents/local-reviewer.toml` に `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`、`sandbox_mode = "read-only"` が存在する。
 - インストーラ実行後、対象リポジトリの `.codex/agents/review-planner.toml` に `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`、`sandbox_mode = "read-only"` が存在する。
-- インストーラ実行後、対象リポジトリの `.codex/agents/spark-implementer.toml` に `model = "gpt-5.3-codex-spark"`、`sandbox_mode = "workspace-write"` が存在する。
+- インストーラ実行後、対象リポジトリの `.codex/agents/spark-implementer.toml` に `model = "gpt-5.3-codex-spark"`、`model_reasoning_effort = "high"`、`sandbox_mode = "workspace-write"` が存在する。
 - 同じskill配下に `scripts/collect-pr-review-context.cs` が存在する。
 - 同じskill配下に `templates/review-plan.md` と `templates/review-result-report.md` が存在する。
 - 同じskill配下に `references/usage.md`、`references/design.md`、`references/troubleshooting.md` が存在する。

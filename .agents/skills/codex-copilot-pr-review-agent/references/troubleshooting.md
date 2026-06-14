@@ -67,6 +67,8 @@ agentが存在してもモデル指定がない場合は、各 `.agent.md` のfr
 - `review-planner`: front matter `model: gpt-5.5`
 - `spark-implementer`: front matter `model: gpt-5.3-codex-spark`
 
+インストーラ実行後の `.codex/agents/spark-implementer.toml` では、`model_reasoning_effort = "high"` が入ることも確認する。
+
 ## commit/pushしないで止まる
 
 次のいずれかを確認する。
