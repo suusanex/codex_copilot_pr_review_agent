@@ -85,9 +85,19 @@ dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <tar
 dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root>
 ```
 
+インストーラは次のAPMコマンドを内部で実行し、その後にCodex設定を補完する。
+
 ```powershell
-apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target codex,agent-skills
+apm install --update --target codex suusanex/codex_copilot_pr_review_agent --root <target-repo-root>
 ```
+
+対象リポジトリの `apm.yml` にこのパッケージが既に登録済みの場合、インストーラは次のように既存依存を更新・再展開する。
+
+```powershell
+apm install --update --target codex --root <target-repo-root>
+```
+
+ローカルのパッケージリポジトリにあるインストーラを使って導入済みリポジトリを更新する場合は、APMの自己依存解決を避けるため、既存の `apm.yml` は維持したままローカル原本からCodex設定とskill assetを同期する。
 
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/SKILL.md` が存在する。
 - `<scratch>/.github/agents/local-reviewer.agent.md` または `<scratch>/.apm/agents/local-reviewer.agent.md` のfront matterに `model: gpt-5.5` が存在する。

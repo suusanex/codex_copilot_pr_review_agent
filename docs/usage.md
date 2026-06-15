@@ -78,6 +78,14 @@ out: .review/pr-123
 apm install --update --target codex suusanex/codex_copilot_pr_review_agent --root <target-repo-root>
 ```
 
+対象リポジトリの `apm.yml` にこのパッケージが既に登録済みの場合、インストーラは次のように既存依存を更新・再展開する。
+
+```powershell
+apm install --update --target codex --root <target-repo-root>
+```
+
+ローカルのパッケージリポジトリにあるインストーラを使って導入済みリポジトリを更新する場合は、APMの自己依存解決を避けるため、既存の `apm.yml` は維持したままローカル原本からCodex設定とskill assetを同期する。
+
 別リポジトリまたはscratch rootへ導入する場合は、次を実施・確認する。
 
 ```powershell

@@ -5,9 +5,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 const string PackageName = "codex-copilot-pr-review-agent";
+const string PackageInstallRef = "suusanex/codex_copilot_pr_review_agent";
+const string InstallerScriptName = "install-codex-copilot-pr-review-agent-local.cs";
 const string LocalReviewerName = "local-reviewer";
 const string ReviewPlannerName = "review-planner";
 const string SparkImplementerName = "spark-implementer";
@@ -47,38 +50,53 @@ if (!Directory.Exists(targetRepoRoot))
     return 2;
 }
 
-var packageRoot = ResolvePackageRoot(options.PackageRoot);
-if (packageRoot is null)
-{
-    Console.WriteLine("Error: package source was not found.");
-    Console.WriteLine("Run from this repository root, or pass --package-root with the repository path.");
-    return 2;
-}
-
-var sourceAgentMarkdownDir = Path.Combine(packageRoot, ".apm", "agents");
-var sourceSkill = Path.Combine(packageRoot, ".apm", "skills", PackageName);
-var sourceInstallerScript = Path.Combine(packageRoot, "scripts", "install-codex-copilot-pr-review-agent-local.cs");
-var sourceSkillScript = Path.Combine(sourceSkill, "scripts");
-
-if (!Directory.Exists(sourceAgentMarkdownDir)
-    || !HasRequiredAgentMarkdowns(sourceAgentMarkdownDir)
-    || !Directory.Exists(sourceSkill)
-    || !Directory.Exists(sourceSkillScript)
-    || !File.Exists(sourceInstallerScript))
-{
-    Console.WriteLine("Error: required package inputs are missing.");
-    return 2;
-}
+string? packageRoot = null;
+string sourceAgentMarkdownDir = string.Empty;
+string sourceSkill = string.Empty;
+string sourceSkillScript = string.Empty;
+string? sourceInstallerScript = null;
+var localSourcePackageRoot = ResolveSourcePackageRoot(options.PackageRoot, GetSourceFilePath());
 
 var logs = new List<string>();
 var blockers = new List<string>();
 
 try
 {
+    RunApmInstall(
+        targetRepoRoot,
+        options.DryRun || options.CheckOnly,
+        options.Verbose,
+        localSourcePackageRoot,
+        logs);
+
+    packageRoot = localSourcePackageRoot ?? ResolvePackageRoot(options.PackageRoot, targetRepoRoot, GetSourceFilePath());
+    if (packageRoot is null)
+    {
+        Console.WriteLine("Error: package source was not found.");
+        Console.WriteLine("Pass --package-root, or rerun after APM install completes.");
+        return 2;
+    }
+
+    sourceAgentMarkdownDir = Path.Combine(packageRoot, ".apm", "agents");
+    sourceSkill = Path.Combine(packageRoot, ".apm", "skills", PackageName);
+    sourceSkillScript = Path.Combine(sourceSkill, "scripts");
+    sourceInstallerScript = ResolveInstallerScript(packageRoot, sourceSkillScript);
+
+    if (!Directory.Exists(sourceAgentMarkdownDir)
+        || !HasRequiredAgentMarkdowns(sourceAgentMarkdownDir)
+        || !Directory.Exists(sourceSkill)
+        || !Directory.Exists(sourceSkillScript)
+        || string.IsNullOrWhiteSpace(sourceInstallerScript))
+    {
+        Console.WriteLine("Error: required package inputs are missing.");
+        return 2;
+    }
+
     CopyProfileConfig(
         targetRepoRoot,
         options.DryRun,
         options.CheckOnly,
+        options.Force,
         logs,
         blockers);
 
@@ -91,22 +109,11 @@ try
         logs,
         blockers);
 
-    CopySkillDirectory(
+    SyncSkillAssets(
         sourceSkill,
         targetRepoRoot,
         options.DryRun,
         options.CheckOnly,
-        options.Force,
-        logs,
-        blockers);
-
-        CopySingleFile(
-            sourceInstallerScript,
-            Path.Combine(targetRepoRoot, ".agents", "skills", PackageName, "scripts", Path.GetFileName(sourceInstallerScript)),
-            ".agents/skills/" + PackageName + "/scripts/" + Path.GetFileName(sourceInstallerScript),
-            options.DryRun,
-            options.CheckOnly,
-            options.Force,
         logs,
         blockers);
 }
@@ -237,7 +244,12 @@ static void ShowUsage()
     Console.WriteLine("  --help, -h              Show this help.");
 }
 
-static string? ResolvePackageRoot(string? overrideRoot)
+static string GetSourceFilePath([CallerFilePath] string path = "")
+{
+    return path;
+}
+
+static string? ResolveSourcePackageRoot(string? overrideRoot, string sourceFilePath)
 {
     if (!string.IsNullOrWhiteSpace(overrideRoot))
     {
@@ -245,18 +257,68 @@ static string? ResolvePackageRoot(string? overrideRoot)
         return IsPackageRoot(explicitRoot) ? explicitRoot : null;
     }
 
-    var current = new DirectoryInfo(Path.GetFullPath(Directory.GetCurrentDirectory()));
-    while (current is not null)
+    var candidates = new List<string>();
+    if (!string.IsNullOrWhiteSpace(sourceFilePath))
     {
-        if (IsPackageRoot(current.FullName))
-        {
-            return Path.GetFullPath(current.FullName);
-        }
+        AddPackageRootCandidates(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath)), candidates);
+    }
 
-        current = current.Parent;
+    AddPackageRootCandidates(Path.GetFullPath(Directory.GetCurrentDirectory()), candidates);
+
+    foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (IsPackageRoot(candidate))
+        {
+            return Path.GetFullPath(candidate);
+        }
     }
 
     return null;
+}
+
+static string? ResolvePackageRoot(string? overrideRoot, string targetRepoRoot, string sourceFilePath)
+{
+    if (!string.IsNullOrWhiteSpace(overrideRoot))
+    {
+        var explicitRoot = Path.GetFullPath(overrideRoot);
+        return IsPackageRoot(explicitRoot) ? explicitRoot : null;
+    }
+
+    var candidates = new List<string>();
+    var apmInstalledPackageRoot = Path.Combine(targetRepoRoot, "apm_modules", "suusanex", "codex_copilot_pr_review_agent");
+    candidates.Add(apmInstalledPackageRoot);
+
+    if (!string.IsNullOrWhiteSpace(sourceFilePath))
+    {
+        AddPackageRootCandidates(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath)), candidates);
+    }
+
+    AddPackageRootCandidates(Path.GetFullPath(Directory.GetCurrentDirectory()), candidates);
+
+    foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (IsPackageRoot(candidate))
+        {
+            return Path.GetFullPath(candidate);
+        }
+    }
+
+    return null;
+}
+
+static void AddPackageRootCandidates(string? startDirectory, List<string> candidates)
+{
+    if (string.IsNullOrWhiteSpace(startDirectory))
+    {
+        return;
+    }
+
+    var current = new DirectoryInfo(startDirectory);
+    while (current is not null)
+    {
+        candidates.Add(current.FullName);
+        current = current.Parent;
+    }
 }
 
 static bool IsPackageRoot(string dir)
@@ -277,6 +339,7 @@ static void CopyProfileConfig(
     string targetRepoRoot,
     bool dryRun,
     bool checkOnly,
+    bool force,
     List<string> logs,
     List<string> blockers)
 {
@@ -306,6 +369,21 @@ static void CopyProfileConfig(
     }
 
     var targetText = File.ReadAllText(targetPath);
+    var targetValues = ParseTomlValues(targetText);
+    var differentValues = requiredValues
+        .Where(item => targetValues.TryGetValue(item.Key, out var targetValue) && !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+        .ToList();
+
+    if (differentValues.Count > 0 && !force)
+    {
+        foreach (var item in differentValues)
+        {
+            blockers.Add($".codex/config.toml: top-level `{item.Key}` is `{targetValues[item.Key]}`, expected `{item.Value}`");
+        }
+
+        return;
+    }
+
     var mergedText = MergeTomlContent(targetText, requiredValues);
     if (Normalize(targetText) == Normalize(mergedText))
     {
@@ -315,7 +393,7 @@ static void CopyProfileConfig(
 
     if (checkOnly)
     {
-        AddTomlValueBlockers(".codex/config.toml", ParseTomlValues(targetText), requiredValues, blockers);
+        AddTomlValueBlockers(".codex/config.toml", targetValues, requiredValues, blockers);
         return;
     }
 
@@ -365,43 +443,53 @@ static void CopyTomlAgentsFromMarkdown(
 
         var targetText = File.ReadAllText(targetPath);
         var targetValues = ParseTomlValues(targetText);
-        ValidateTopLevelKeys(sourceValues, targetValues, display, force, dryRun, checkOnly, logs, blockers);
+        var protectedDifferentValues = sourceValues
+            .Where(item => targetValues.TryGetValue(item.Key, out var targetValue) && !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+            .Where(item => IsForceProtectedTomlKey(item.Key))
+            .ToList();
 
-        if (Normalize(sourceText) == Normalize(targetText))
+        var mergedText = MergeTomlContent(targetText, sourceValues);
+        if (Normalize(mergedText) == Normalize(targetText))
         {
             logs.Add($"{display}: no change");
             continue;
         }
 
-        if (!force)
+        if (protectedDifferentValues.Count > 0 && !force)
         {
-            blockers.Add($"{display}: file differs. Run with --force to overwrite.");
+            foreach (var item in protectedDifferentValues)
+            {
+                blockers.Add($"{display}: top-level `{item.Key}` is `{targetValues[item.Key]}`, expected `{item.Value}`");
+            }
+
             continue;
         }
 
         if (checkOnly)
         {
-            blockers.Add($"{display}: overwrite is required. Run with --force.");
+            blockers.Add($"{display}: top-level values update is required.");
             continue;
         }
 
         if (dryRun)
         {
-            logs.Add($"[dry-run] {display}: overwrite");
+            logs.Add($"[dry-run] {display}: update top-level values");
             continue;
         }
 
-        WriteOrDryRun(sourceText, targetPath, dryRun, $"{display}: overwrite", logs);
-        logs.Add($"{display}: overwritten");
+        WriteOrDryRun(mergedText, targetPath, dryRun, $"{display}: update top-level values", logs);
+        if (!dryRun)
+        {
+            logs.Add($"{display}: updated");
+        }
     }
 }
 
-static void CopySkillDirectory(
+static void SyncSkillAssets(
     string sourceSkillDir,
     string targetRepoRoot,
     bool dryRun,
     bool checkOnly,
-    bool force,
     List<string> logs,
     List<string> blockers)
 {
@@ -410,74 +498,57 @@ static void CopySkillDirectory(
     {
         var relative = Path.GetRelativePath(sourceSkillDir, sourcePath);
         var normalizedRelative = relative.Replace(Path.DirectorySeparatorChar, '/');
-        var targetPath = Path.Combine(targetDir, relative);
-        CopySingleFile(
-            sourcePath,
-            targetPath,
-            ".agents/skills/" + PackageName + "/" + normalizedRelative,
-            dryRun,
-            checkOnly,
-            force,
-            logs,
-            blockers);
-    }
-}
 
-static void CopySingleFile(
-    string sourcePath,
-    string targetPath,
-    string displayPath,
-    bool dryRun,
-    bool checkOnly,
-    bool force,
-    List<string> logs,
-    List<string> blockers)
-{
-    var sourceText = File.ReadAllText(sourcePath);
+        if (dryRun)
+        {
+            logs.Add($"[dry-run] .agents/skills/{PackageName}/{normalizedRelative}: managed by APM");
+            continue;
+        }
+
+        var targetPath = Path.Combine(targetDir, relative);
+        var displayPath = ".agents/skills/" + PackageName + "/" + normalizedRelative;
+
         if (!File.Exists(targetPath))
         {
             if (checkOnly)
             {
                 blockers.Add($"{displayPath}: file is missing");
-                return;
+                continue;
             }
 
-            WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: add", logs);
+            WriteOrDryRun(File.ReadAllText(sourcePath), targetPath, dryRun, $"{displayPath}: add", logs);
             if (!dryRun)
             {
                 logs.Add($"{displayPath}: added");
             }
 
-        return;
-    }
+            continue;
+        }
 
-    var targetText = File.ReadAllText(targetPath);
-    if (Normalize(sourceText) == Normalize(targetText))
-    {
-        logs.Add($"{displayPath}: no change");
-        return;
-    }
+        var sourceText = File.ReadAllText(sourcePath);
+        var targetText = File.ReadAllText(targetPath);
+        if (Normalize(sourceText) == Normalize(targetText))
+        {
+            if (!checkOnly)
+            {
+                logs.Add($"{displayPath}: no change");
+            }
 
-    if (!force)
-    {
-        blockers.Add($"{displayPath}: file differs. Run with --force to overwrite.");
-        return;
-    }
+            continue;
+        }
 
-    if (checkOnly)
-    {
-        blockers.Add($"{displayPath}: overwrite is required. Run with --force.");
-        return;
-    }
+        if (checkOnly)
+        {
+            blockers.Add($"{displayPath}: file differs");
+            continue;
+        }
 
-    if (dryRun)
-    {
-        logs.Add($"[dry-run] {displayPath}: overwrite");
-        return;
+        WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: update", logs);
+        if (!dryRun)
+        {
+            logs.Add($"{displayPath}: updated");
+        }
     }
-
-    WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: overwrite", logs);
-    logs.Add($"{displayPath}: overwritten");
 }
 
 static void WriteOrDryRun(string content, string targetPath, bool dryRun, string log, List<string> logs)
@@ -497,39 +568,6 @@ static void WriteOrDryRun(string content, string targetPath, bool dryRun, string
     File.WriteAllText(targetPath, content, Encoding.UTF8);
 }
 
-static void ValidateTopLevelKeys(
-    Dictionary<string, string> sourceValues,
-    Dictionary<string, string> targetValues,
-    string display,
-    bool force,
-    bool dryRun,
-    bool checkOnly,
-    List<string> logs,
-    List<string> blockers)
-{
-    var missingOrDifferent = sourceValues
-        .Where(item => !targetValues.TryGetValue(item.Key, out var targetValue) || !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
-        .Select(item => item)
-        .ToList();
-
-    if (missingOrDifferent.Count == 0)
-    {
-        return;
-    }
-
-    if (force && !dryRun && !checkOnly)
-    {
-        var prefix = string.Join(", ", missingOrDifferent.Select(kv => $"`{kv.Key}`"));
-        logs.Add($"[repair] {display}: top-level keys need correction ({prefix})");
-        return;
-    }
-
-    foreach (var item in missingOrDifferent)
-    {
-        blockers.Add($"{display}: top-level `{item.Key}` is `{(targetValues.TryGetValue(item.Key, out var value) ? value : "missing")}`, expected `{item.Value}`");
-    }
-}
-
 static AgentDefinition ParseAgentMarkdown(string path)
 {
     var lines = File.ReadAllLines(path);
@@ -539,11 +577,13 @@ static AgentDefinition ParseAgentMarkdown(string path)
     }
 
     var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    var frontMatterEnd = -1;
     for (var i = 1; i < lines.Length; i++)
     {
         var line = lines[i].Trim();
         if (line == "---")
         {
+            frontMatterEnd = i;
             break;
         }
 
@@ -565,7 +605,13 @@ static AgentDefinition ParseAgentMarkdown(string path)
         throw new InvalidOperationException($"Agent front matter must include name, description, and model: {path}");
     }
 
-    return new AgentDefinition(name, description, model);
+    if (frontMatterEnd < 0)
+    {
+        throw new InvalidOperationException($"Agent front matter is not closed: {path}");
+    }
+
+    var instructions = string.Join(Environment.NewLine, lines.Skip(frontMatterEnd + 1)).Trim();
+    return new AgentDefinition(name, description, model, instructions);
 }
 
 static string BuildConfigToml(Dictionary<string, string> requiredValues)
@@ -582,6 +628,7 @@ static string BuildAgentToml(AgentDefinition agent)
     var builder = new StringBuilder();
     builder.AppendLine($"name = \"{EscapeTomlString(agent.Name)}\"");
     builder.AppendLine($"description = \"{EscapeTomlString(agent.Description)}\"");
+    builder.AppendLine($"developer_instructions = \"{EscapeTomlString(agent.Instructions)}\"");
     builder.AppendLine($"model = \"{EscapeTomlString(agent.Model)}\"");
 
     var reasoningEffort = GetModelReasoningEffort(agent.Name);
@@ -616,7 +663,13 @@ static string GetSandboxMode(string agentName)
 
 static string EscapeTomlString(string value)
 {
-    return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    return value
+        .Replace("\\", "\\\\")
+        .Replace("\"", "\\\"")
+        .Replace("\r\n", "\n")
+        .Replace('\r', '\n')
+        .Replace("\n", "\\n")
+        .Replace("\t", "\\t");
 }
 
 static Dictionary<string, string> ParseTomlValues(string text)
@@ -645,7 +698,7 @@ static Dictionary<string, string> ParseTomlValues(string text)
 
         var key = trimmed[..index].Trim();
         var value = trimmed[(index + 1)..].Trim();
-        if (key is "model" or "model_reasoning_effort" or "sandbox_mode")
+        if (key is "name" or "description" or "developer_instructions" or "model" or "model_reasoning_effort" or "sandbox_mode")
         {
             values[key] = value;
         }
@@ -709,6 +762,11 @@ static void AddTomlValueBlockers(
     }
 }
 
+static bool IsForceProtectedTomlKey(string key)
+{
+    return key is "model" or "model_reasoning_effort" or "sandbox_mode";
+}
+
 static string TrimQuotes(string value)
 {
     if (string.IsNullOrWhiteSpace(value))
@@ -735,6 +793,198 @@ static string Normalize(string text)
     return text.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
 }
 
+static void RunApmInstall(
+    string targetRepoRoot,
+    bool dryRun,
+    bool verbose,
+    string? localSourcePackageRoot,
+    List<string> logs)
+{
+    var packageAlreadyRegistered = IsPackageRegisteredInApmYaml(targetRepoRoot);
+    var targetIsLocalSource = !string.IsNullOrWhiteSpace(localSourcePackageRoot)
+        && AreSameDirectory(targetRepoRoot, localSourcePackageRoot);
+
+    if ((packageAlreadyRegistered || targetIsLocalSource) && !string.IsNullOrWhiteSpace(localSourcePackageRoot))
+    {
+        logs.Add("apm install --update --target codex: skipped; using local registered package source");
+        return;
+    }
+
+    var arguments = new List<string>
+    {
+        "install",
+        "--update",
+        "--target",
+        "codex",
+        "--root",
+        targetRepoRoot,
+    };
+
+    if (!packageAlreadyRegistered)
+    {
+        arguments.Insert(4, PackageInstallRef);
+    }
+
+    if (dryRun)
+    {
+        arguments.Add("--dry-run");
+    }
+
+    if (verbose)
+    {
+        arguments.Add("--verbose");
+    }
+
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "apm",
+        WorkingDirectory = targetRepoRoot,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+    };
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start apm process.");
+    var stdout = process.StandardOutput.ReadToEnd();
+    var stderr = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+
+    var action = packageAlreadyRegistered ? "update registered packages" : "install package";
+    logs.Add(dryRun
+        ? $"[dry-run] apm install --update --target codex: {action}"
+        : $"apm install --update --target codex: {action}");
+
+    if (!string.IsNullOrWhiteSpace(stdout))
+    {
+        Console.Write(stdout);
+    }
+
+    if (!string.IsNullOrWhiteSpace(stderr))
+    {
+        Console.Error.Write(stderr);
+    }
+
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"apm install failed with exit code {process.ExitCode}.");
+    }
+}
+
+static bool AreSameDirectory(string left, string right)
+{
+    return string.Equals(
+        Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        StringComparison.OrdinalIgnoreCase);
+}
+
+static bool IsPackageRegisteredInApmYaml(string targetRepoRoot)
+{
+    var apmYamlPath = Path.Combine(targetRepoRoot, "apm.yml");
+    if (!File.Exists(apmYamlPath))
+    {
+        return false;
+    }
+
+    var inDependencies = false;
+    var inApmDependencies = false;
+    foreach (var rawLine in File.ReadLines(apmYamlPath))
+    {
+        var trimmed = rawLine.Trim();
+        if (trimmed.Length == 0 || trimmed.StartsWith("#", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        if (!char.IsWhiteSpace(rawLine[0]))
+        {
+            inDependencies = string.Equals(trimmed, "dependencies:", StringComparison.OrdinalIgnoreCase);
+            inApmDependencies = false;
+            continue;
+        }
+
+        if (!inDependencies)
+        {
+            continue;
+        }
+
+        if (trimmed.StartsWith("apm:", StringComparison.OrdinalIgnoreCase))
+        {
+            inApmDependencies = true;
+            if (IsRegisteredPackageValue(trimmed["apm:".Length..]))
+            {
+                return true;
+            }
+
+            continue;
+        }
+
+        if (!inApmDependencies)
+        {
+            continue;
+        }
+
+        if (!trimmed.StartsWith("-", StringComparison.Ordinal))
+        {
+            if (trimmed.Contains(':', StringComparison.Ordinal))
+            {
+                inApmDependencies = false;
+            }
+
+            continue;
+        }
+
+        if (IsRegisteredPackageValue(trimmed[1..]))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool IsRegisteredPackageValue(string value)
+{
+    var normalized = value.Trim().TrimEnd(',');
+    if (normalized.Length == 0 || normalized == "[]")
+    {
+        return false;
+    }
+
+    if (normalized.Length >= 2
+        && ((normalized[0] == '"' && normalized[^1] == '"')
+            || (normalized[0] == '\'' && normalized[^1] == '\'')))
+    {
+        normalized = normalized[1..^1].Trim();
+    }
+
+    return string.Equals(normalized, PackageInstallRef, StringComparison.OrdinalIgnoreCase)
+        || normalized.StartsWith(PackageInstallRef + "#", StringComparison.OrdinalIgnoreCase);
+}
+
+static string? ResolveInstallerScript(string packageRoot, string sourceSkillScriptDir)
+{
+    var sourceInPackageScripts = Path.Combine(packageRoot, "scripts", InstallerScriptName);
+    if (File.Exists(sourceInPackageScripts))
+    {
+        return sourceInPackageScripts;
+    }
+
+    var sourceInSkillScripts = Path.Combine(sourceSkillScriptDir, InstallerScriptName);
+    if (File.Exists(sourceInSkillScripts))
+    {
+        return sourceInSkillScripts;
+    }
+
+    return null;
+}
+
 sealed class InstallOptions
 {
     public string? TargetRepoRoot { get; set; }
@@ -747,4 +997,4 @@ sealed class InstallOptions
     public bool HasError { get; set; }
 }
 
-sealed record AgentDefinition(string Name, string Description, string Model);
+sealed record AgentDefinition(string Name, string Description, string Model, string Instructions);

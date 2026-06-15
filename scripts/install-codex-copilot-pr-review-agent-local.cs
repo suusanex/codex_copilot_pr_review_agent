@@ -55,6 +55,7 @@ string sourceAgentMarkdownDir = string.Empty;
 string sourceSkill = string.Empty;
 string sourceSkillScript = string.Empty;
 string? sourceInstallerScript = null;
+var localSourcePackageRoot = ResolveSourcePackageRoot(options.PackageRoot, GetSourceFilePath());
 
 var logs = new List<string>();
 var blockers = new List<string>();
@@ -65,9 +66,10 @@ try
         targetRepoRoot,
         options.DryRun || options.CheckOnly,
         options.Verbose,
+        localSourcePackageRoot,
         logs);
 
-    packageRoot = ResolvePackageRoot(options.PackageRoot, targetRepoRoot, GetSourceFilePath());
+    packageRoot = localSourcePackageRoot ?? ResolvePackageRoot(options.PackageRoot, targetRepoRoot, GetSourceFilePath());
     if (packageRoot is null)
     {
         Console.WriteLine("Error: package source was not found.");
@@ -107,7 +109,7 @@ try
         logs,
         blockers);
 
-    VerifySkillAssets(
+    SyncSkillAssets(
         sourceSkill,
         targetRepoRoot,
         options.DryRun,
@@ -245,6 +247,33 @@ static void ShowUsage()
 static string GetSourceFilePath([CallerFilePath] string path = "")
 {
     return path;
+}
+
+static string? ResolveSourcePackageRoot(string? overrideRoot, string sourceFilePath)
+{
+    if (!string.IsNullOrWhiteSpace(overrideRoot))
+    {
+        var explicitRoot = Path.GetFullPath(overrideRoot);
+        return IsPackageRoot(explicitRoot) ? explicitRoot : null;
+    }
+
+    var candidates = new List<string>();
+    if (!string.IsNullOrWhiteSpace(sourceFilePath))
+    {
+        AddPackageRootCandidates(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath)), candidates);
+    }
+
+    AddPackageRootCandidates(Path.GetFullPath(Directory.GetCurrentDirectory()), candidates);
+
+    foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (IsPackageRoot(candidate))
+        {
+            return Path.GetFullPath(candidate);
+        }
+    }
+
+    return null;
 }
 
 static string? ResolvePackageRoot(string? overrideRoot, string targetRepoRoot, string sourceFilePath)
@@ -414,8 +443,9 @@ static void CopyTomlAgentsFromMarkdown(
 
         var targetText = File.ReadAllText(targetPath);
         var targetValues = ParseTomlValues(targetText);
-        var differentValues = sourceValues
+        var protectedDifferentValues = sourceValues
             .Where(item => targetValues.TryGetValue(item.Key, out var targetValue) && !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+            .Where(item => IsForceProtectedTomlKey(item.Key))
             .ToList();
 
         var mergedText = MergeTomlContent(targetText, sourceValues);
@@ -425,9 +455,9 @@ static void CopyTomlAgentsFromMarkdown(
             continue;
         }
 
-        if (differentValues.Count > 0 && !force)
+        if (protectedDifferentValues.Count > 0 && !force)
         {
-            foreach (var item in differentValues)
+            foreach (var item in protectedDifferentValues)
             {
                 blockers.Add($"{display}: top-level `{item.Key}` is `{targetValues[item.Key]}`, expected `{item.Value}`");
             }
@@ -437,7 +467,7 @@ static void CopyTomlAgentsFromMarkdown(
 
         if (checkOnly)
         {
-            blockers.Add($"{display}: top-level values update is required. Run with --force.");
+            blockers.Add($"{display}: top-level values update is required.");
             continue;
         }
 
@@ -455,7 +485,7 @@ static void CopyTomlAgentsFromMarkdown(
     }
 }
 
-static void VerifySkillAssets(
+static void SyncSkillAssets(
     string sourceSkillDir,
     string targetRepoRoot,
     bool dryRun,
@@ -480,13 +510,43 @@ static void VerifySkillAssets(
 
         if (!File.Exists(targetPath))
         {
-            blockers.Add($"{displayPath}: file is missing after APM install.");
-            return;
+            if (checkOnly)
+            {
+                blockers.Add($"{displayPath}: file is missing");
+                continue;
+            }
+
+            WriteOrDryRun(File.ReadAllText(sourcePath), targetPath, dryRun, $"{displayPath}: add", logs);
+            if (!dryRun)
+            {
+                logs.Add($"{displayPath}: added");
+            }
+
+            continue;
         }
 
-        if (!checkOnly)
+        var sourceText = File.ReadAllText(sourcePath);
+        var targetText = File.ReadAllText(targetPath);
+        if (Normalize(sourceText) == Normalize(targetText))
         {
-            logs.Add($"{displayPath}: present");
+            if (!checkOnly)
+            {
+                logs.Add($"{displayPath}: no change");
+            }
+
+            continue;
+        }
+
+        if (checkOnly)
+        {
+            blockers.Add($"{displayPath}: file differs");
+            continue;
+        }
+
+        WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: update", logs);
+        if (!dryRun)
+        {
+            logs.Add($"{displayPath}: updated");
         }
     }
 }
@@ -517,11 +577,13 @@ static AgentDefinition ParseAgentMarkdown(string path)
     }
 
     var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    var frontMatterEnd = -1;
     for (var i = 1; i < lines.Length; i++)
     {
         var line = lines[i].Trim();
         if (line == "---")
         {
+            frontMatterEnd = i;
             break;
         }
 
@@ -543,7 +605,13 @@ static AgentDefinition ParseAgentMarkdown(string path)
         throw new InvalidOperationException($"Agent front matter must include name, description, and model: {path}");
     }
 
-    return new AgentDefinition(name, description, model);
+    if (frontMatterEnd < 0)
+    {
+        throw new InvalidOperationException($"Agent front matter is not closed: {path}");
+    }
+
+    var instructions = string.Join(Environment.NewLine, lines.Skip(frontMatterEnd + 1)).Trim();
+    return new AgentDefinition(name, description, model, instructions);
 }
 
 static string BuildConfigToml(Dictionary<string, string> requiredValues)
@@ -560,6 +628,7 @@ static string BuildAgentToml(AgentDefinition agent)
     var builder = new StringBuilder();
     builder.AppendLine($"name = \"{EscapeTomlString(agent.Name)}\"");
     builder.AppendLine($"description = \"{EscapeTomlString(agent.Description)}\"");
+    builder.AppendLine($"developer_instructions = \"{EscapeTomlString(agent.Instructions)}\"");
     builder.AppendLine($"model = \"{EscapeTomlString(agent.Model)}\"");
 
     var reasoningEffort = GetModelReasoningEffort(agent.Name);
@@ -594,7 +663,13 @@ static string GetSandboxMode(string agentName)
 
 static string EscapeTomlString(string value)
 {
-    return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    return value
+        .Replace("\\", "\\\\")
+        .Replace("\"", "\\\"")
+        .Replace("\r\n", "\n")
+        .Replace('\r', '\n')
+        .Replace("\n", "\\n")
+        .Replace("\t", "\\t");
 }
 
 static Dictionary<string, string> ParseTomlValues(string text)
@@ -623,7 +698,7 @@ static Dictionary<string, string> ParseTomlValues(string text)
 
         var key = trimmed[..index].Trim();
         var value = trimmed[(index + 1)..].Trim();
-        if (key is "model" or "model_reasoning_effort" or "sandbox_mode")
+        if (key is "name" or "description" or "developer_instructions" or "model" or "model_reasoning_effort" or "sandbox_mode")
         {
             values[key] = value;
         }
@@ -687,6 +762,11 @@ static void AddTomlValueBlockers(
     }
 }
 
+static bool IsForceProtectedTomlKey(string key)
+{
+    return key is "model" or "model_reasoning_effort" or "sandbox_mode";
+}
+
 static string TrimQuotes(string value)
 {
     if (string.IsNullOrWhiteSpace(value))
@@ -717,18 +797,33 @@ static void RunApmInstall(
     string targetRepoRoot,
     bool dryRun,
     bool verbose,
+    string? localSourcePackageRoot,
     List<string> logs)
 {
+    var packageAlreadyRegistered = IsPackageRegisteredInApmYaml(targetRepoRoot);
+    var targetIsLocalSource = !string.IsNullOrWhiteSpace(localSourcePackageRoot)
+        && AreSameDirectory(targetRepoRoot, localSourcePackageRoot);
+
+    if ((packageAlreadyRegistered || targetIsLocalSource) && !string.IsNullOrWhiteSpace(localSourcePackageRoot))
+    {
+        logs.Add("apm install --update --target codex: skipped; using local registered package source");
+        return;
+    }
+
     var arguments = new List<string>
     {
         "install",
         "--update",
         "--target",
         "codex",
-        PackageInstallRef,
         "--root",
         targetRepoRoot,
     };
+
+    if (!packageAlreadyRegistered)
+    {
+        arguments.Insert(4, PackageInstallRef);
+    }
 
     if (dryRun)
     {
@@ -760,9 +855,10 @@ static void RunApmInstall(
     var stderr = process.StandardError.ReadToEnd();
     process.WaitForExit();
 
+    var action = packageAlreadyRegistered ? "update registered packages" : "install package";
     logs.Add(dryRun
-        ? "[dry-run] apm install --update --target codex"
-        : "apm install --update --target codex: complete");
+        ? $"[dry-run] apm install --update --target codex: {action}"
+        : $"apm install --update --target codex: {action}");
 
     if (!string.IsNullOrWhiteSpace(stdout))
     {
@@ -778,6 +874,98 @@ static void RunApmInstall(
     {
         throw new InvalidOperationException($"apm install failed with exit code {process.ExitCode}.");
     }
+}
+
+static bool AreSameDirectory(string left, string right)
+{
+    return string.Equals(
+        Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        StringComparison.OrdinalIgnoreCase);
+}
+
+static bool IsPackageRegisteredInApmYaml(string targetRepoRoot)
+{
+    var apmYamlPath = Path.Combine(targetRepoRoot, "apm.yml");
+    if (!File.Exists(apmYamlPath))
+    {
+        return false;
+    }
+
+    var inDependencies = false;
+    var inApmDependencies = false;
+    foreach (var rawLine in File.ReadLines(apmYamlPath))
+    {
+        var trimmed = rawLine.Trim();
+        if (trimmed.Length == 0 || trimmed.StartsWith("#", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        if (!char.IsWhiteSpace(rawLine[0]))
+        {
+            inDependencies = string.Equals(trimmed, "dependencies:", StringComparison.OrdinalIgnoreCase);
+            inApmDependencies = false;
+            continue;
+        }
+
+        if (!inDependencies)
+        {
+            continue;
+        }
+
+        if (trimmed.StartsWith("apm:", StringComparison.OrdinalIgnoreCase))
+        {
+            inApmDependencies = true;
+            if (IsRegisteredPackageValue(trimmed["apm:".Length..]))
+            {
+                return true;
+            }
+
+            continue;
+        }
+
+        if (!inApmDependencies)
+        {
+            continue;
+        }
+
+        if (!trimmed.StartsWith("-", StringComparison.Ordinal))
+        {
+            if (trimmed.Contains(':', StringComparison.Ordinal))
+            {
+                inApmDependencies = false;
+            }
+
+            continue;
+        }
+
+        if (IsRegisteredPackageValue(trimmed[1..]))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool IsRegisteredPackageValue(string value)
+{
+    var normalized = value.Trim().TrimEnd(',');
+    if (normalized.Length == 0 || normalized == "[]")
+    {
+        return false;
+    }
+
+    if (normalized.Length >= 2
+        && ((normalized[0] == '"' && normalized[^1] == '"')
+            || (normalized[0] == '\'' && normalized[^1] == '\'')))
+    {
+        normalized = normalized[1..^1].Trim();
+    }
+
+    return string.Equals(normalized, PackageInstallRef, StringComparison.OrdinalIgnoreCase)
+        || normalized.StartsWith(PackageInstallRef + "#", StringComparison.OrdinalIgnoreCase);
 }
 
 static string? ResolveInstallerScript(string packageRoot, string sourceSkillScriptDir)
@@ -809,4 +997,4 @@ sealed class InstallOptions
     public bool HasError { get; set; }
 }
 
-sealed record AgentDefinition(string Name, string Description, string Model);
+sealed record AgentDefinition(string Name, string Description, string Model, string Instructions);

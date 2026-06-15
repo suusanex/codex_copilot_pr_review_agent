@@ -10,7 +10,6 @@ targets:
 dependencies:
   apm:
   - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
-  - suusanex/codex_copilot_pr_review_agent
   mcp: []
 includes: auto
 scripts: {}
