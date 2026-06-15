@@ -17,7 +17,7 @@
 - `.github/agents/spark-implementer.agent.md`
   - `model: "gpt-5.3-codex-spark"` を必須指定し、計画範囲だけを実装するagent。
 - `scripts/install-codex-copilot-pr-review-agent-local.cs`
-  - `.agent.md` front matterを原本として、対象リポジトリの `.codex/config.toml` と `.codex/agents/*.toml` を生成・更新するFile-based app。
+  - Codex向けAPM導入を実行し、`.agent.md` front matterを原本として、対象リポジトリの `.codex/config.toml` と `.codex/agents/*.toml` を生成・更新するFile-based app。
 - `scripts/collect-pr-review-context.cs`
   - GitHub CLIからPR文脈を収集するFile-based app。
 - `templates/review-plan.md`
@@ -44,6 +44,8 @@
 - `spark-implementer`: `model = "gpt-5.3-codex-spark"`、`model_reasoning_effort = "high"`
 
 このリポジトリで管理する原本は `.github/agents/*.agent.md` と `.apm/agents/*.agent.md` のfront matterである。`.codex/config.toml` と `.codex/agents/*.toml` は、インストーラが対象リポジトリへ生成・更新する配布先設定として扱う。
+
+skill配下の `scripts/`、`templates/`、`references/` はAPMの配布物とし、インストーラは上書きコピーではなく存在確認のみを行う。
 
 ## 安全性
 

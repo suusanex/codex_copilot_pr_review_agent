@@ -9,15 +9,24 @@
 
 ## 基本フロー
 
-1. 対象リポジトリで作業状態を確認する。
-2. PRが存在しない場合は、対象リポジトリのルールに従ってPRを作成する。
+### レビュー前準備
+
+1. 対象リポジトリで作業ブランチ、merge先base branch、未コミット変更、push状態、PR有無を確認する。
+2. 作業ブランチがない場合は、対象リポジトリのルールに従って作成する。
+3. 未コミット変更がある場合は、PRに含める範囲を確認してcommitする。
+4. head branchがremoteへpushされていない場合はpushする。
+5. PRが存在しない場合は、merge先base branchとhead branchを確認してPRを作成する。PR作成できない場合は人手での作業が必要として止める。
+6. PR番号、base branch、head branchを確定してからレビュー文脈収集へ進む。
+
+### レビュー実行
+
+1. PRレビュー文脈を収集する。
+2. `local-reviewer` で、PRの差分、つまりbase branchとhead branchの差分だけを対象にローカルCodexレビューを行う。
 3. Copilot自動レビューが有効な場合は完了を待つ。無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。
-4. PRレビュー文脈を収集する。
-5. `local-reviewer` でローカルCodexレビューを行う。
-6. `review-planner` で統合修正計画を作成する。
-7. `spark-implementer` で計画範囲を実装する。
-8. テスト、lint、format、型チェックを実行する。
-9. 結果レポートを作成し、必要に応じてcommit/pushする。
+4. `review-planner` で統合修正計画を作成する。
+5. `spark-implementer` で計画範囲を実装する。
+6. テスト、lint、format、型チェックを実行する。
+7. 結果レポートを作成し、必要に応じて実装修正後のcommit/pushを行う。
 
 ## 必須モデル指定
 
@@ -63,7 +72,13 @@ out: .review/pr-123
 
 ## APM導入後の確認
 
-別リポジトリまたはscratch rootへ導入した後、次を実施・確認する。
+インストーラは次のAPMコマンドを内部で実行し、その後にCodex設定を補完する。
+
+```powershell
+apm install --update --target codex suusanex/codex_copilot_pr_review_agent --root <target-repo-root>
+```
+
+別リポジトリまたはscratch rootへ導入する場合は、次を実施・確認する。
 
 ```powershell
 dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root> --dry-run
@@ -76,20 +91,16 @@ dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <tar
 dotnet run --file D:\path\to\codex_copilot_pr_review_agent\scripts\install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root> --dry-run
 ```
 
-`--dry-run` で反映予定を、`--check-only` で不足を確認した後、通常実行を行う。
+`--dry-run` でAPM dry-runと補完予定を、`--check-only` で現状との差分を確認した後、通常実行を行う。
 
 ```powershell
 dotnet run --file scripts/install-codex-copilot-pr-review-agent-local.cs -- <target-repo-root>
 ```
 
-```powershell
-apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target codex,agent-skills
-```
-
 - `<scratch>/.agents/skills/codex-copilot-pr-review-agent/SKILL.md` が存在する。
-- `<scratch>/.github/agents/local-reviewer.agent.md` または `<scratch>/.apm/agents/local-reviewer.agent.md` のfront matterに `model: gpt-5.5` が存在する。
-- `<scratch>/.github/agents/review-planner.agent.md` または `<scratch>/.apm/agents/review-planner.agent.md` のfront matterに `model: gpt-5.5` が存在する。
-- `<scratch>/.github/agents/spark-implementer.agent.md` または `<scratch>/.apm/agents/spark-implementer.agent.md` のfront matterに `model: gpt-5.3-codex-spark` が存在する。
+- `<scratch>/apm_modules/suusanex/codex_copilot_pr_review_agent/.apm/agents/local-reviewer.agent.md` のfront matterに `model: gpt-5.5` が存在する。
+- `<scratch>/apm_modules/suusanex/codex_copilot_pr_review_agent/.apm/agents/review-planner.agent.md` のfront matterに `model: gpt-5.5` が存在する。
+- `<scratch>/apm_modules/suusanex/codex_copilot_pr_review_agent/.apm/agents/spark-implementer.agent.md` のfront matterに `model: gpt-5.3-codex-spark` が存在する。
 - インストーラ実行後、対象リポジトリの `.codex/config.toml` に `model = "gpt-5.5"` と `model_reasoning_effort = "medium"` が存在する。
 - インストーラ実行後、対象リポジトリの `.codex/agents/local-reviewer.toml` に `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`、`sandbox_mode = "read-only"` が存在する。
 - インストーラ実行後、対象リポジトリの `.codex/agents/review-planner.toml` に `model = "gpt-5.5"`、`model_reasoning_effort = "medium"`、`sandbox_mode = "read-only"` が存在する。
@@ -101,7 +112,9 @@ apm install suusanex/codex_copilot_pr_review_agent --root <scratch> --target cod
 
 ## commit/push
 
-commit/push は自動実行前提ではなく、次を確認してから行う。
+レビュー前のcommit/pushは、PRを成立させるための必須準備として扱う。
+
+実装修正後のcommit/pushは自動実行前提ではなく、次を確認してから行う。
 
 - 未コミット変更に無関係な差分が混ざっていないこと。
 - 関連テストが成功していること。

@@ -4,12 +4,13 @@ description: Codex and GitHub Copilot PR review remediation workflow package
 author: suusanex
 type: hybrid
 targets:
-  - codex
-  - copilot
-  - agent-skills
+- codex
+- copilot
+- agent-skills
 dependencies:
   apm:
-    - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
+  - suusanex/agent_skills_dotnet_utility/.agents/skills/dotnet-file-based-apps
+  - suusanex/codex_copilot_pr_review_agent
   mcp: []
 includes: auto
 scripts: {}

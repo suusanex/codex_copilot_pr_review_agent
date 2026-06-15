@@ -9,6 +9,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 
 const string PackageName = "codex-copilot-pr-review-agent";
+const string PackageInstallRef = "suusanex/codex_copilot_pr_review_agent";
 const string InstallerScriptName = "install-codex-copilot-pr-review-agent-local.cs";
 const string LocalReviewerName = "local-reviewer";
 const string ReviewPlannerName = "review-planner";
@@ -49,38 +50,51 @@ if (!Directory.Exists(targetRepoRoot))
     return 2;
 }
 
-var packageRoot = ResolvePackageRoot(options.PackageRoot, GetSourceFilePath());
-if (packageRoot is null)
-{
-    Console.WriteLine("Error: package source was not found.");
-    Console.WriteLine("Run from this repository root, or pass --package-root with the repository path.");
-    return 2;
-}
-
-var sourceAgentMarkdownDir = Path.Combine(packageRoot, ".apm", "agents");
-var sourceSkill = Path.Combine(packageRoot, ".apm", "skills", PackageName);
-var sourceSkillScript = Path.Combine(sourceSkill, "scripts");
-var sourceInstallerScript = ResolveInstallerScript(packageRoot, sourceSkillScript);
-
-if (!Directory.Exists(sourceAgentMarkdownDir)
-    || !HasRequiredAgentMarkdowns(sourceAgentMarkdownDir)
-    || !Directory.Exists(sourceSkill)
-    || !Directory.Exists(sourceSkillScript)
-    || string.IsNullOrWhiteSpace(sourceInstallerScript))
-{
-    Console.WriteLine("Error: required package inputs are missing.");
-    return 2;
-}
+string? packageRoot = null;
+string sourceAgentMarkdownDir = string.Empty;
+string sourceSkill = string.Empty;
+string sourceSkillScript = string.Empty;
+string? sourceInstallerScript = null;
 
 var logs = new List<string>();
 var blockers = new List<string>();
 
 try
 {
+    RunApmInstall(
+        targetRepoRoot,
+        options.DryRun || options.CheckOnly,
+        options.Verbose,
+        logs);
+
+    packageRoot = ResolvePackageRoot(options.PackageRoot, targetRepoRoot, GetSourceFilePath());
+    if (packageRoot is null)
+    {
+        Console.WriteLine("Error: package source was not found.");
+        Console.WriteLine("Pass --package-root, or rerun after APM install completes.");
+        return 2;
+    }
+
+    sourceAgentMarkdownDir = Path.Combine(packageRoot, ".apm", "agents");
+    sourceSkill = Path.Combine(packageRoot, ".apm", "skills", PackageName);
+    sourceSkillScript = Path.Combine(sourceSkill, "scripts");
+    sourceInstallerScript = ResolveInstallerScript(packageRoot, sourceSkillScript);
+
+    if (!Directory.Exists(sourceAgentMarkdownDir)
+        || !HasRequiredAgentMarkdowns(sourceAgentMarkdownDir)
+        || !Directory.Exists(sourceSkill)
+        || !Directory.Exists(sourceSkillScript)
+        || string.IsNullOrWhiteSpace(sourceInstallerScript))
+    {
+        Console.WriteLine("Error: required package inputs are missing.");
+        return 2;
+    }
+
     CopyProfileConfig(
         targetRepoRoot,
         options.DryRun,
         options.CheckOnly,
+        options.Force,
         logs,
         blockers);
 
@@ -93,23 +107,11 @@ try
         logs,
         blockers);
 
-    CopySkillDirectory(
+    VerifySkillAssets(
         sourceSkill,
         targetRepoRoot,
         options.DryRun,
         options.CheckOnly,
-        options.Force,
-        InstallerScriptName,
-        logs,
-        blockers);
-
-        CopySingleFile(
-            sourceInstallerScript,
-            Path.Combine(targetRepoRoot, ".agents", "skills", PackageName, "scripts", Path.GetFileName(sourceInstallerScript)),
-            ".agents/skills/" + PackageName + "/scripts/" + Path.GetFileName(sourceInstallerScript),
-            options.DryRun,
-            options.CheckOnly,
-            options.Force,
         logs,
         blockers);
 }
@@ -245,7 +247,7 @@ static string GetSourceFilePath([CallerFilePath] string path = "")
     return path;
 }
 
-static string? ResolvePackageRoot(string? overrideRoot, string sourceFilePath)
+static string? ResolvePackageRoot(string? overrideRoot, string targetRepoRoot, string sourceFilePath)
 {
     if (!string.IsNullOrWhiteSpace(overrideRoot))
     {
@@ -254,6 +256,9 @@ static string? ResolvePackageRoot(string? overrideRoot, string sourceFilePath)
     }
 
     var candidates = new List<string>();
+    var apmInstalledPackageRoot = Path.Combine(targetRepoRoot, "apm_modules", "suusanex", "codex_copilot_pr_review_agent");
+    candidates.Add(apmInstalledPackageRoot);
+
     if (!string.IsNullOrWhiteSpace(sourceFilePath))
     {
         AddPackageRootCandidates(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath)), candidates);
@@ -305,6 +310,7 @@ static void CopyProfileConfig(
     string targetRepoRoot,
     bool dryRun,
     bool checkOnly,
+    bool force,
     List<string> logs,
     List<string> blockers)
 {
@@ -334,6 +340,21 @@ static void CopyProfileConfig(
     }
 
     var targetText = File.ReadAllText(targetPath);
+    var targetValues = ParseTomlValues(targetText);
+    var differentValues = requiredValues
+        .Where(item => targetValues.TryGetValue(item.Key, out var targetValue) && !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+        .ToList();
+
+    if (differentValues.Count > 0 && !force)
+    {
+        foreach (var item in differentValues)
+        {
+            blockers.Add($".codex/config.toml: top-level `{item.Key}` is `{targetValues[item.Key]}`, expected `{item.Value}`");
+        }
+
+        return;
+    }
+
     var mergedText = MergeTomlContent(targetText, requiredValues);
     if (Normalize(targetText) == Normalize(mergedText))
     {
@@ -343,7 +364,7 @@ static void CopyProfileConfig(
 
     if (checkOnly)
     {
-        AddTomlValueBlockers(".codex/config.toml", ParseTomlValues(targetText), requiredValues, blockers);
+        AddTomlValueBlockers(".codex/config.toml", targetValues, requiredValues, blockers);
         return;
     }
 
@@ -393,21 +414,22 @@ static void CopyTomlAgentsFromMarkdown(
 
         var targetText = File.ReadAllText(targetPath);
         var targetValues = ParseTomlValues(targetText);
-        var missingOrDifferent = sourceValues
-            .Where(item => !targetValues.TryGetValue(item.Key, out var targetValue) || !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
+        var differentValues = sourceValues
+            .Where(item => targetValues.TryGetValue(item.Key, out var targetValue) && !string.Equals(targetValue, item.Value, StringComparison.Ordinal))
             .ToList();
 
-        if (missingOrDifferent.Count == 0)
+        var mergedText = MergeTomlContent(targetText, sourceValues);
+        if (Normalize(mergedText) == Normalize(targetText))
         {
             logs.Add($"{display}: no change");
             continue;
         }
 
-        if (!force)
+        if (differentValues.Count > 0 && !force)
         {
-            foreach (var item in missingOrDifferent)
+            foreach (var item in differentValues)
             {
-                blockers.Add($"{display}: top-level `{item.Key}` is `{(targetValues.TryGetValue(item.Key, out var value) ? value : "missing")}`, expected `{item.Value}`");
+                blockers.Add($"{display}: top-level `{item.Key}` is `{targetValues[item.Key]}`, expected `{item.Value}`");
             }
 
             continue;
@@ -425,13 +447,6 @@ static void CopyTomlAgentsFromMarkdown(
             continue;
         }
 
-        var mergedText = MergeTomlContent(targetText, sourceValues);
-        if (Normalize(mergedText) == Normalize(targetText))
-        {
-            logs.Add($"{display}: no change");
-            continue;
-        }
-
         WriteOrDryRun(mergedText, targetPath, dryRun, $"{display}: update top-level values", logs);
         if (!dryRun)
         {
@@ -440,13 +455,11 @@ static void CopyTomlAgentsFromMarkdown(
     }
 }
 
-static void CopySkillDirectory(
+static void VerifySkillAssets(
     string sourceSkillDir,
     string targetRepoRoot,
     bool dryRun,
     bool checkOnly,
-    bool force,
-    string excludeRelativeFileName,
     List<string> logs,
     List<string> blockers)
 {
@@ -455,79 +468,27 @@ static void CopySkillDirectory(
     {
         var relative = Path.GetRelativePath(sourceSkillDir, sourcePath);
         var normalizedRelative = relative.Replace(Path.DirectorySeparatorChar, '/');
-        if (string.Equals(normalizedRelative, $"scripts/{excludeRelativeFileName}", StringComparison.OrdinalIgnoreCase))
+
+        if (dryRun)
         {
+            logs.Add($"[dry-run] .agents/skills/{PackageName}/{normalizedRelative}: managed by APM");
             continue;
         }
 
         var targetPath = Path.Combine(targetDir, relative);
-        CopySingleFile(
-            sourcePath,
-            targetPath,
-            ".agents/skills/" + PackageName + "/" + normalizedRelative,
-            dryRun,
-            checkOnly,
-            force,
-            logs,
-            blockers);
-    }
-}
+        var displayPath = ".agents/skills/" + PackageName + "/" + normalizedRelative;
 
-static void CopySingleFile(
-    string sourcePath,
-    string targetPath,
-    string displayPath,
-    bool dryRun,
-    bool checkOnly,
-    bool force,
-    List<string> logs,
-    List<string> blockers)
-{
-    var sourceText = File.ReadAllText(sourcePath);
-    if (!File.Exists(targetPath))
-    {
-        if (checkOnly)
+        if (!File.Exists(targetPath))
         {
-            blockers.Add($"{displayPath}: file is missing");
+            blockers.Add($"{displayPath}: file is missing after APM install.");
             return;
         }
 
-        WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: add", logs);
-        if (!dryRun)
+        if (!checkOnly)
         {
-            logs.Add($"{displayPath}: added");
+            logs.Add($"{displayPath}: present");
         }
-
-        return;
     }
-
-    var targetText = File.ReadAllText(targetPath);
-    if (Normalize(sourceText) == Normalize(targetText))
-    {
-        logs.Add($"{displayPath}: no change");
-        return;
-    }
-
-    if (!force)
-    {
-        blockers.Add($"{displayPath}: file differs. Run with --force to overwrite.");
-        return;
-    }
-
-    if (checkOnly)
-    {
-        blockers.Add($"{displayPath}: overwrite is required. Run with --force.");
-        return;
-    }
-
-    if (dryRun)
-    {
-        logs.Add($"[dry-run] {displayPath}: overwrite");
-        return;
-    }
-
-    WriteOrDryRun(sourceText, targetPath, dryRun, $"{displayPath}: overwrite", logs);
-    logs.Add($"{displayPath}: overwritten");
 }
 
 static void WriteOrDryRun(string content, string targetPath, bool dryRun, string log, List<string> logs)
@@ -750,6 +711,73 @@ static bool IsTopLevelAssignment(string line, string key)
 static string Normalize(string text)
 {
     return text.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+}
+
+static void RunApmInstall(
+    string targetRepoRoot,
+    bool dryRun,
+    bool verbose,
+    List<string> logs)
+{
+    var arguments = new List<string>
+    {
+        "install",
+        "--update",
+        "--target",
+        "codex",
+        PackageInstallRef,
+        "--root",
+        targetRepoRoot,
+    };
+
+    if (dryRun)
+    {
+        arguments.Add("--dry-run");
+    }
+
+    if (verbose)
+    {
+        arguments.Add("--verbose");
+    }
+
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "apm",
+        WorkingDirectory = targetRepoRoot,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+    };
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start apm process.");
+    var stdout = process.StandardOutput.ReadToEnd();
+    var stderr = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+
+    logs.Add(dryRun
+        ? "[dry-run] apm install --update --target codex"
+        : "apm install --update --target codex: complete");
+
+    if (!string.IsNullOrWhiteSpace(stdout))
+    {
+        Console.Write(stdout);
+    }
+
+    if (!string.IsNullOrWhiteSpace(stderr))
+    {
+        Console.Error.Write(stderr);
+    }
+
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"apm install failed with exit code {process.ExitCode}.");
+    }
 }
 
 static string? ResolveInstallerScript(string packageRoot, string sourceSkillScriptDir)
