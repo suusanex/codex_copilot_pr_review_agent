@@ -17,10 +17,18 @@
 
 ## GitHub Copilotレビュー未取得時の判断
 
+- Wait status: reviewAndInline / reviewOnly / inlineOnly / none / timeout / disabled
+- Timed out: true / false
+- Wait seconds:
+- Review found: true / false
+- Expected inline comments:
+- Actual inline comments:
 - Status: 取得済み / 未取得
 - Reason:
 - Decision: ローカルCodexレビューのみで進める / 人間判断へ戻す
 - Human action:
+
+`Wait status` が `timeout` の場合は、GitHub Copilotレビューを未取得として扱う。推測で「コメントなし」と判断しない。
 
 ## レビュー指摘一覧
 

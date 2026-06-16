@@ -22,7 +22,7 @@
 
 1. PRレビュー文脈を収集する。
 2. `local-reviewer` で、PRの差分、つまりbase branchとhead branchの差分だけを対象にローカルCodexレビューを行う。
-3. Copilot自動レビューが有効な場合は完了を待つ。無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。
+3. Copilot自動レビューが有効な場合は、収集CLIが標準で完了を待機する。無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。
 4. `review-planner` で統合修正計画を作成する。
 5. `spark-implementer` で計画範囲を実装する。
 6. テスト、lint、format、型チェックを実行する。
@@ -45,7 +45,9 @@ Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasonin
 このMVPは、GitHub上に投稿済みのレビュー情報を収集する。スクリプトから `@copilot` へのレビューリクエストは行わない。
 
 - Copilotレビューが取得できた場合は、ローカルCodexレビューと合わせて `review-planner` に渡す。
-- Copilotレビューが見つからない場合は「未取得」として扱う。
+- Copilotレビューがtimeoutまでに見つからない場合は「未取得」として扱う。
+- timeout時は「コメントなし」と判断せず、未取得として扱う。
+- `review-context.md/json` の `copilotReviewWait.status` で `reviewAndInline`、`reviewOnly`、`inlineOnly`、`none`、`timeout`、`disabled` を区別する。
 - 「未取得」の場合、ローカルCodexレビューのみで進めるか、人間判断へ戻すかを `review-plan.md` に記録する。
 
 ## PRレビュー文脈の収集
@@ -60,6 +62,20 @@ dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr
 - `.review/pr-123/review-context.json`
 
 `--include-checks` を指定すると、`gh pr checks` によるチェック状態も収集する。
+
+収集CLIは標準でGitHub Copilotレビューの完了を待機する。待機時間やpoll間隔を変える場合は、次を指定する。
+
+```powershell
+dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --copilot-timeout-seconds 300 --copilot-poll-interval-seconds 10 --copilot-stable-samples 2
+```
+
+待機を無効化する場合は、次を指定する。
+
+```powershell
+dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --no-wait-for-copilot
+```
+
+`review-context.md/json` には `copilotReviewWait` として待機結果、待機時間、取得件数、timeout有無が記録される。
 
 ## Codexへの依頼例
 

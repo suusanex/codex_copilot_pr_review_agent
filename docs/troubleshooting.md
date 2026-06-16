@@ -34,7 +34,15 @@ gh auth status
 
 このパッケージはGitHub CLIで取得できるPRレビュー、PRコメント、レビューコメントを対象にする。GitHub CopilotレビューがGitHub上にまだ投稿されていない場合、収集結果には含まれない。
 
-Copilot自動レビューが有効な場合は、レビュー完了を待ってから再実行する。自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。このMVPでは、スクリプトから `@copilot` へのレビューリクエストは行わない。
+収集CLIは標準でGitHub Copilotレビューの完了を待機する。待機時間内にレビューが到着しない場合、`review-context.md/json` の `copilotReviewWait.status` は `timeout` になり、コメントなしではなく未取得として扱う。
+
+待機時間を延ばす場合は、次を指定して再実行する。
+
+```powershell
+dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --copilot-timeout-seconds 300
+```
+
+自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。このMVPでは、スクリプトから `@copilot` へのレビューリクエストは行わない。
 
 再実行しても見つからない場合は、`review-plan.md` に「GitHub Copilotレビュー: 未取得」と記録し、ローカルCodexレビューのみで進めるか、人間判断へ戻すかを明記する。
 
