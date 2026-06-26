@@ -40,10 +40,10 @@ disable-model-invocation: false
 
 ### レビュー実行
 
-1. `scripts/collect-pr-review-context.cs` を使い、PR本文、レビュー、コメント、必要に応じてチェック状態を収集する。
+1. `scripts/collect-pr-review-context.cs` を使い、PR本文、レビュー、コメント、必要に応じてチェック状態を収集する。収集CLIは標準でGitHub Copilotレビュー完了を待機し、timeout時は未取得として記録する。
 2. `local-reviewer` は必須モデル `gpt-5.5`、必須推論設定 `medium` で、PRの差分、つまりmerge先base branchとhead branchの差分だけを対象にローカルCodexレビューを作成する。
 3. ローカルCodexレビュー結果と収集結果を `review-planner` に渡す。
-4. GitHub Copilotレビューが未取得の場合は、未取得として扱うか、必要に応じてレビュー完了待ちを明記する。
+4. GitHub Copilotレビューが未取得またはtimeoutの場合は、未取得として扱う。推測でコメントなしとは判断しない。
 5. `review-planner` は必須モデル `gpt-5.5`、必須推論設定 `medium` で、ファイルを変更せず、適用可否、重複コメント、修正順序、検証方針を含む `review-plan.md` を作成する。
 6. `spark-implementer` は必須モデル `gpt-5.3-codex-spark`、必須推論設定 `high` で、`review-plan.md` の範囲だけを実装する。
 7. 対象リポジトリの関連テスト、lint、format、型チェックを可能な範囲で実行する。
@@ -63,6 +63,8 @@ disable-model-invocation: false
 ```powershell
 dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --include-checks
 ```
+
+標準ではGitHub Copilotレビュー完了を待機する。待機を無効化する場合は `--no-wait-for-copilot` を指定する。待機時間やpoll間隔は `--copilot-timeout-seconds`、`--copilot-poll-interval-seconds`、`--copilot-stable-samples` で調整できる。
 
 生成物:
 

@@ -34,13 +34,21 @@ gh auth status
 
 このパッケージはGitHub CLIで取得できるPRレビュー、PRコメント、レビューコメントを対象にする。GitHub CopilotレビューがGitHub上にまだ投稿されていない場合、収集結果には含まれない。
 
-Copilot自動レビューが有効な場合は、レビュー完了を待ってから再実行する。自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。このMVPでは、スクリプトから `@copilot` へのレビューリクエストは行わない。
+収集CLIは標準でGitHub Copilotレビューの完了を待機する。待機時間内にレビューが到着しない場合、`review-context.md/json` の `copilotReviewWait.status` は `timeout` になり、コメントなしではなく未取得として扱う。
+
+待機時間を延ばす場合は、次を指定して再実行する。
+
+```powershell
+dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --copilot-timeout-seconds 300
+```
+
+自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。このMVPでは、スクリプトから `@copilot` へのレビューリクエストは行わない。
 
 再実行しても見つからない場合は、`review-plan.md` に「GitHub Copilotレビュー: 未取得」と記録し、ローカルCodexレビューのみで進めるか、人間判断へ戻すかを明記する。
 
 ## APM導入後にskill assetが見つからない
 
-scratch rootへ導入して、skill配下の相対パスを確認する。
+インストーラは次のAPMコマンドを内部で実行する。まずこのコマンドが成功するか確認する。
 
 ```powershell
 apm install --update --target codex suusanex/codex_copilot_pr_review_agent --root <scratch>
@@ -69,13 +77,22 @@ apm install --update --target codex --root <scratch>
 
 ファイルが不足している場合は、APMパッケージの `apm pack --dry-run -v` でskill配下の `scripts/`、`templates/`、`references/` がpack対象に含まれるか確認する。
 
-agentが存在してもモデル指定がない場合は、各 `.agent.md` のfront matterに次の `model` が存在するか確認する。`.codex/agents/*.toml` はインストーラで生成されるため、`model_reasoning_effort` と `sandbox_mode` はインストーラ実行後の `.codex/agents/*.toml` で確認する。
+agentが存在してもモデル指定がない場合は、`<scratch>/apm_modules/suusanex/codex_copilot_pr_review_agent/.apm/agents/*.agent.md` のfront matterに次の `model` が存在するか確認する。`.codex/agents/*.toml` はAPM生成後にインストーラが補完するため、`model_reasoning_effort` と `sandbox_mode` はインストーラ実行後の `.codex/agents/*.toml` で確認する。
 
 - `local-reviewer`: front matter `model: gpt-5.5`
 - `review-planner`: front matter `model: gpt-5.5`
 - `spark-implementer`: front matter `model: gpt-5.3-codex-spark`
 
 インストーラ実行後の `.codex/agents/spark-implementer.toml` では、`model_reasoning_effort = "high"` が入ることも確認する。
+
+## `--force` を求められる
+
+現在のインストーラでは、次のときだけ `--force` が必要である。
+
+- `.codex/config.toml` に既にある `model` または `model_reasoning_effort` を別値から変更するとき
+- `.codex/agents/*.toml` に既にある `model`、`model_reasoning_effort`、`sandbox_mode` を別値から変更するとき
+
+APMが生成した `.codex/agents/*.toml` に `model` などのキーが存在しないだけなら、`--force` は不要であり、通常実行で補完される。
 
 ## commit/pushしないで止まる
 

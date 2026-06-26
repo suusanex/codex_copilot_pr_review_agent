@@ -34,9 +34,12 @@ PR本文、ローカルCodexレビュー、GitHub Copilotレビュー、PRコメ
 2. レビューコメントはコメント単位で列挙し、適用、保留、非適用を明確に分類する。
 3. 同じ原因のコメントは統合してよいが、元コメントへの対応関係を失わない。
 4. 実装範囲をPRレビュー修正に限定し、無関係なリファクタリングや仕様拡張を入れない。
-5. GitHub Copilotレビューが取得できない場合は、未取得として記録する。推測で補わない。
-6. テスト方針は、対象リポジトリの既存手順に従って具体化する。
-7. commit/pushに進むためのゲートを明記する。
+5. `review-context.json` または `review-context.md` の `copilotReviewWait` を確認し、GitHub Copilotレビューの取得状態を判断する。
+6. `copilotReviewWait.status` が `timeout` の場合は、未取得として記録する。推測で「コメントなし」と判断してはいけない。
+7. `copilotReviewWait.status` が `reviewOnly`、`inlineOnly`、`reviewAndInline`、`none`、`disabled` のいずれかを区別し、計画上の扱いを明記する。
+8. GitHub Copilotレビューが取得できない場合は、未取得として記録する。推測で補わない。
+9. テスト方針は、対象リポジトリの既存手順に従って具体化する。
+10. commit/pushに進むためのゲートを明記する。
 
 ## 出力
 

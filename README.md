@@ -71,6 +71,16 @@ PRレビュー文脈を収集する。
 dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --include-checks
 ```
 
+このコマンドは標準でGitHub Copilotレビューの到着を待機する。待機中は `gh pr view --json latestReviews,reviews` と Pull request review comments API をpollし、Copilotレビュー本文とinline comment数が安定してから `review-context.md/json` を出力する。
+
+待機設定を変更する場合は次を指定する。
+
+```powershell
+dotnet run --file scripts/collect-pr-review-context.cs -- --repo owner/name --pr 123 --out .review/pr-123 --copilot-timeout-seconds 300 --copilot-poll-interval-seconds 10 --copilot-stable-samples 2
+```
+
+待機を無効化する場合は `--no-wait-for-copilot` を指定する。
+
 生成物:
 
 - `.review/pr-123/review-context.md`
@@ -103,9 +113,10 @@ Codex agentでは、`GPT 5.5 Medium` を `model = "gpt-5.5"` と `model_reasonin
 
 このMVPは、GitHub上に投稿済みのPRレビュー、PRコメント、レビューコメントを読み取る。スクリプトから `@copilot` へのレビューリクエストは行わない。
 
-- Copilot自動レビューが有効なリポジトリでは、レビュー完了を待ってから収集する。
+- Copilot自動レビューが有効なリポジトリでは、収集CLIが標準でレビュー完了を待機する。
 - 自動レビューが無効な場合は、ユーザーが事前にCopilotレビューをリクエストする。
-- Copilotレビューが見つからない場合は「未取得」として扱い、`review-plan.md` でローカルCodexレビューのみで進めるか、人間判断へ戻すかを明記する。
+- Copilotレビューがtimeoutまでに見つからない場合は「未取得」として扱い、`review-plan.md` でローカルCodexレビューのみで進めるか、人間判断へ戻すかを明記する。
+- `review-context.md/json` には `copilotReviewWait` として待機結果、待機時間、取得件数、timeout有無が記録される。
 
 ## 必要な環境
 
@@ -128,7 +139,7 @@ apm --version
 - GitHub CLIの取得に失敗した場合、フォールバック推測は行わない。
 - レビュー前のcommit/pushは、PRを成立させるための必須準備として扱う。
 - 実装修正後のcommit/pushは、未コミット変更、テスト結果、対象リポジトリのルール、上位指示を確認してから行う。
-- GitHub Copilotレビューが取得できない場合は、未取得としてレポートする。
+- GitHub Copilotレビューがtimeoutまでに取得できない場合は、未取得としてレポートする。コメントなしとは判断しない。
 
 ## MVP完了条件
 

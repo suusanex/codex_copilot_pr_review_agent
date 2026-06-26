@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 var options = ParseArguments(args);
 
@@ -24,20 +25,7 @@ try
     var outputDirectory = Path.GetFullPath(options.OutputDirectory);
     Directory.CreateDirectory(outputDirectory);
 
-    var prView = await RunGhAsync(
-        "pr",
-        "view",
-        options.PullRequestNumber.ToString(),
-        "--repo",
-        options.Repository,
-        "--json",
-        "number,title,state,author,body,url,headRefName,baseRefName,mergeable,isDraft,reviewDecision,latestReviews,comments,commits,files");
-
-    var reviewComments = await RunGhAsync(
-        "api",
-        $"repos/{options.Owner}/{options.Name}/pulls/{options.PullRequestNumber}/comments",
-        "--paginate",
-        "--slurp");
+    var collected = await CollectPrReviewDataAsync(options);
 
     string? checks = null;
     if (options.IncludeChecks)
@@ -49,12 +37,11 @@ try
             "--repo",
             options.Repository,
             "--json",
-            "name,state,conclusion,startedAt,completedAt,link,bucket");
+            "name,state,startedAt,completedAt,link,bucket");
     }
 
-    using var prViewJson = JsonDocument.Parse(prView);
-    var normalizedReviewComments = NormalizePaginatedJsonArray(reviewComments);
-    using var reviewCommentsJson = JsonDocument.Parse(normalizedReviewComments);
+    using var prViewJson = JsonDocument.Parse(collected.PrView);
+    using var reviewCommentsJson = JsonDocument.Parse(collected.ReviewComments);
     using var checksJson = checks is null ? null : JsonDocument.Parse(checks);
 
     var context = new Dictionary<string, object?>
@@ -63,6 +50,7 @@ try
         ["repository"] = options.Repository,
         ["pullRequest"] = options.PullRequestNumber,
         ["includeChecks"] = options.IncludeChecks,
+        ["copilotReviewWait"] = collected.CopilotReviewWait.ToDictionary(),
         ["sources"] = new Dictionary<string, object?>
         {
             ["prView"] = prViewJson.RootElement.Clone(),
@@ -80,7 +68,7 @@ try
     var markdownPath = Path.Combine(outputDirectory, "review-context.md");
 
     File.WriteAllText(jsonPath, JsonSerializer.Serialize(context, jsonOptions), Encoding.UTF8);
-    File.WriteAllText(markdownPath, BuildMarkdown(options, prViewJson.RootElement, reviewCommentsJson.RootElement, checksJson?.RootElement), Encoding.UTF8);
+    File.WriteAllText(markdownPath, BuildMarkdown(options, prViewJson.RootElement, reviewCommentsJson.RootElement, checksJson?.RootElement, collected.CopilotReviewWait), Encoding.UTF8);
 
     Console.WriteLine("Review context collected.");
     Console.WriteLine($"Markdown: {markdownPath}");
@@ -126,6 +114,18 @@ static Options ParseArguments(string[] args)
             case "--include-checks":
                 options.IncludeChecks = true;
                 break;
+            case "--no-wait-for-copilot":
+                options.WaitForCopilot = false;
+                break;
+            case "--copilot-timeout-seconds":
+                options.CopilotTimeoutSeconds = ReadPositiveInteger(args, ref i, "--copilot-timeout-seconds");
+                break;
+            case "--copilot-poll-interval-seconds":
+                options.CopilotPollIntervalSeconds = ReadPositiveInteger(args, ref i, "--copilot-poll-interval-seconds");
+                break;
+            case "--copilot-stable-samples":
+                options.CopilotStableSamples = ReadPositiveInteger(args, ref i, "--copilot-stable-samples");
+                break;
             default:
                 throw new ArgumentException($"Unknown argument: {arg}");
         }
@@ -143,6 +143,17 @@ static string ReadValue(string[] args, ref int index, string optionName)
 
     index++;
     return args[index];
+}
+
+static int ReadPositiveInteger(string[] args, ref int index, string optionName)
+{
+    var value = ReadValue(args, ref index, optionName);
+    if (!int.TryParse(value, out var number) || number <= 0)
+    {
+        throw new ArgumentException($"{optionName} must be a positive integer.");
+    }
+
+    return number;
 }
 
 static void ValidateOptions(Options options)
@@ -170,6 +181,138 @@ static void ValidateOptions(Options options)
 
     options.Owner = parts[0];
     options.Name = parts[1];
+}
+
+static async Task<CollectedPrReviewData> CollectPrReviewDataAsync(Options options)
+{
+    var startedAt = DateTimeOffset.UtcNow;
+    var prView = await FetchPrViewAsync(options);
+    var normalizedReviewComments = await FetchNormalizedReviewCommentsAsync(options);
+
+    using var startPrViewJson = JsonDocument.Parse(prView);
+    var startHeadRefOid = GetString(startPrViewJson.RootElement, "headRefOid");
+
+    if (!options.WaitForCopilot)
+    {
+        using var reviewCommentsJson = JsonDocument.Parse(normalizedReviewComments);
+        var snapshot = AnalyzeCopilotSnapshot(startPrViewJson.RootElement, reviewCommentsJson.RootElement, startHeadRefOid);
+        var completedAt = DateTimeOffset.UtcNow;
+        return new CollectedPrReviewData(
+            prView,
+            normalizedReviewComments,
+            BuildWaitResult(
+                status: "disabled",
+                timedOut: false,
+                startedAt,
+                completedAt,
+                startHeadRefOid,
+                options,
+                snapshot,
+                stableSamplesObserved: 0));
+    }
+
+    CopilotSnapshot snapshotForResult;
+    var stableSamplesObserved = 0;
+    string? previousBody = null;
+    int? previousInlineCount = null;
+
+    while (true)
+    {
+        using var prViewJson = JsonDocument.Parse(prView);
+        using var reviewCommentsJson = JsonDocument.Parse(normalizedReviewComments);
+        snapshotForResult = AnalyzeCopilotSnapshot(prViewJson.RootElement, reviewCommentsJson.RootElement, startHeadRefOid);
+
+        if (IsCopilotSnapshotComplete(snapshotForResult))
+        {
+            if (string.Equals(previousBody, snapshotForResult.ReviewBody, StringComparison.Ordinal)
+                && previousInlineCount == snapshotForResult.ActualInlineCommentCount)
+            {
+                stableSamplesObserved++;
+            }
+            else
+            {
+                previousBody = snapshotForResult.ReviewBody;
+                previousInlineCount = snapshotForResult.ActualInlineCommentCount;
+                stableSamplesObserved = 1;
+            }
+
+            if (stableSamplesObserved >= options.CopilotStableSamples)
+            {
+                var completedAt = DateTimeOffset.UtcNow;
+                return new CollectedPrReviewData(
+                    prView,
+                    normalizedReviewComments,
+                    BuildWaitResult(
+                        ResolveCopilotStatus(snapshotForResult, timedOut: false),
+                        timedOut: false,
+                        startedAt,
+                        completedAt,
+                        startHeadRefOid,
+                        options,
+                        snapshotForResult,
+                        stableSamplesObserved));
+            }
+        }
+        else
+        {
+            previousBody = null;
+            previousInlineCount = null;
+            stableSamplesObserved = 0;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - startedAt;
+        var timeout = TimeSpan.FromSeconds(options.CopilotTimeoutSeconds);
+        if (elapsed >= timeout)
+        {
+            var completedAt = DateTimeOffset.UtcNow;
+            return new CollectedPrReviewData(
+                prView,
+                normalizedReviewComments,
+                BuildWaitResult(
+                    ResolveCopilotStatus(snapshotForResult, timedOut: true),
+                    timedOut: true,
+                    startedAt,
+                    completedAt,
+                    startHeadRefOid,
+                    options,
+                    snapshotForResult,
+                    stableSamplesObserved));
+        }
+
+        var remaining = timeout - elapsed;
+        var delay = TimeSpan.FromSeconds(options.CopilotPollIntervalSeconds);
+        if (delay > remaining)
+        {
+            delay = remaining;
+        }
+
+        await Task.Delay(delay);
+        prView = await FetchPrViewAsync(options);
+        normalizedReviewComments = await FetchNormalizedReviewCommentsAsync(options);
+    }
+}
+
+static async Task<string> FetchPrViewAsync(Options options)
+{
+    return await RunGhAsync(
+        "pr",
+        "view",
+        options.PullRequestNumber.ToString(),
+        "--repo",
+        options.Repository,
+        "--json",
+        "number,title,state,author,body,url,headRefName,headRefOid,baseRefName,mergeable,isDraft,reviewDecision,latestReviews,reviews,comments,commits,files");
+}
+
+static async Task<string> FetchNormalizedReviewCommentsAsync(Options options)
+{
+    var reviewComments = await RunGhAsync(
+        "api",
+        $"repos/{options.Owner}/{options.Name}/pulls/{options.PullRequestNumber}/comments",
+        "--paginate",
+        "--slurp");
+
+    return NormalizePaginatedJsonArray(reviewComments);
 }
 
 static async Task<string> RunGhAsync(params string[] arguments)
@@ -245,7 +388,7 @@ static string NormalizePaginatedJsonArray(string json)
     return Encoding.UTF8.GetString(stream.ToArray());
 }
 
-static string BuildMarkdown(Options options, JsonElement prView, JsonElement reviewComments, JsonElement? checks)
+static string BuildMarkdown(Options options, JsonElement prView, JsonElement reviewComments, JsonElement? checks, CopilotReviewWaitResult copilotReviewWait)
 {
     var builder = new StringBuilder();
     var title = GetString(prView, "title");
@@ -266,6 +409,7 @@ static string BuildMarkdown(Options options, JsonElement prView, JsonElement rev
     builder.AppendLine($"- Head: {GetString(prView, "headRefName")}");
     builder.AppendLine();
 
+    AppendCopilotReviewWait(builder, copilotReviewWait);
     AppendBody(builder, prView);
     AppendFiles(builder, prView);
     AppendLatestReviews(builder, prView);
@@ -275,6 +419,51 @@ static string BuildMarkdown(Options options, JsonElement prView, JsonElement rev
     AppendCopilotNote(builder, prView, reviewComments);
 
     return builder.ToString();
+}
+
+static void AppendCopilotReviewWait(StringBuilder builder, CopilotReviewWaitResult wait)
+{
+    builder.AppendLine("## GitHub Copilot Review Wait");
+    builder.AppendLine();
+    builder.AppendLine($"- Status: {wait.Status}");
+    builder.AppendLine($"- Timed out: {wait.TimedOut}");
+    builder.AppendLine($"- Started at: {wait.StartedAt:O}");
+    builder.AppendLine($"- Completed at: {wait.CompletedAt:O}");
+    builder.AppendLine($"- Elapsed seconds: {wait.ElapsedSeconds}");
+    builder.AppendLine($"- Head commit: {wait.HeadRefOid}");
+    builder.AppendLine($"- Timeout seconds: {wait.TimeoutSeconds}");
+    builder.AppendLine($"- Poll interval seconds: {wait.PollIntervalSeconds}");
+    builder.AppendLine($"- Stable samples observed: {wait.StableSamplesObserved}");
+    builder.AppendLine($"- Review found: {wait.ReviewFound}");
+    builder.AppendLine($"- Review state: {wait.ReviewState}");
+    builder.AppendLine($"- Review submitted at: {wait.ReviewSubmittedAt}");
+    builder.AppendLine($"- Expected inline comments: {FormatNullableNumber(wait.ExpectedInlineCommentCount)}");
+    builder.AppendLine($"- Actual inline comments: {wait.ActualInlineCommentCount}");
+    builder.AppendLine();
+
+    if (wait.TimedOut)
+    {
+        builder.AppendLine("GitHub Copilot review was not collected before timeout. Treat this as not collected, not as evidence that Copilot had no comments.");
+        builder.AppendLine();
+        return;
+    }
+
+    if (wait.Status == "disabled")
+    {
+        builder.AppendLine("GitHub Copilot review waiting was disabled for this collection run.");
+        builder.AppendLine();
+        return;
+    }
+
+    builder.AppendLine(wait.Status switch
+    {
+        "reviewAndInline" => "GitHub Copilot review body and inline comments were collected.",
+        "reviewOnly" => "GitHub Copilot review body was collected, but no inline comments were identified.",
+        "inlineOnly" => "GitHub Copilot inline comments were collected, but no review body was identified.",
+        "none" => "GitHub Copilot review data was not identified.",
+        _ => "GitHub Copilot review wait result was recorded."
+    });
+    builder.AppendLine();
 }
 
 static void AppendBody(StringBuilder builder, JsonElement prView)
@@ -382,7 +571,7 @@ static void AppendChecks(StringBuilder builder, JsonElement? checks)
     {
         foreach (var check in checks.Value.EnumerateArray())
         {
-            builder.AppendLine($"- {GetString(check, "name")}: state={GetString(check, "state")}, conclusion={GetString(check, "conclusion")}, bucket={GetString(check, "bucket")}");
+            builder.AppendLine($"- {GetString(check, "name")}: state={GetString(check, "state")}, bucket={GetString(check, "bucket")}");
         }
     }
 
@@ -405,6 +594,181 @@ static void AppendCopilotNote(StringBuilder builder, JsonElement prView, JsonEle
     }
 
     builder.AppendLine();
+}
+
+static CopilotSnapshot AnalyzeCopilotSnapshot(JsonElement prView, JsonElement reviewComments, string headRefOid)
+{
+    var review = FindBestCopilotReview(prView, headRefOid);
+    var actualInlineCommentCount = CountCopilotInlineComments(reviewComments);
+    var reviewBody = review?.Body ?? string.Empty;
+    var expectedInlineCommentCount = ExtractGeneratedCommentCount(reviewBody);
+
+    return new CopilotSnapshot(
+        ReviewFound: review is not null,
+        ReviewState: review?.State ?? string.Empty,
+        ReviewSubmittedAt: review?.SubmittedAt ?? string.Empty,
+        ReviewBody: reviewBody,
+        ReviewIsTerminal: review?.IsTerminal ?? false,
+        ExpectedInlineCommentCount: expectedInlineCommentCount,
+        ActualInlineCommentCount: actualInlineCommentCount);
+}
+
+static CopilotReview? FindBestCopilotReview(JsonElement prView, string headRefOid)
+{
+    var reviews = new List<CopilotReview>();
+    AddCopilotReviews(reviews, prView, "latestReviews", headRefOid);
+    AddCopilotReviews(reviews, prView, "reviews", headRefOid);
+
+    return reviews
+        .OrderByDescending(review => review.CommitMatchesHead)
+        .ThenByDescending(review => review.CommitIsUnknown)
+        .ThenByDescending(review => ParseDateTimeOffset(review.SubmittedAt))
+        .FirstOrDefault();
+}
+
+static void AddCopilotReviews(List<CopilotReview> reviews, JsonElement prView, string propertyName, string headRefOid)
+{
+    if (!TryGetArray(prView, propertyName, out var reviewArray))
+    {
+        return;
+    }
+
+    foreach (var review in reviewArray.EnumerateArray())
+    {
+        var author = GetNestedString(review, "author", "login");
+        if (!IsCopilotLogin(author))
+        {
+            continue;
+        }
+
+        var state = GetString(review, "state");
+        var commitOid = GetNestedString(review, "commit", "oid");
+        var commitMatchesHead = !string.IsNullOrWhiteSpace(headRefOid)
+            && string.Equals(commitOid, headRefOid, StringComparison.OrdinalIgnoreCase);
+        var commitIsUnknown = string.IsNullOrWhiteSpace(commitOid);
+        reviews.Add(new CopilotReview(
+            State: state,
+            SubmittedAt: GetString(review, "submittedAt"),
+            Body: GetString(review, "body"),
+            CommitMatchesHead: commitMatchesHead,
+            CommitIsUnknown: commitIsUnknown,
+            IsTerminal: IsTerminalReviewState(state)));
+    }
+}
+
+static bool IsTerminalReviewState(string state)
+{
+    return state is "COMMENTED" or "APPROVED" or "CHANGES_REQUESTED";
+}
+
+static int CountCopilotInlineComments(JsonElement reviewComments)
+{
+    if (reviewComments.ValueKind != JsonValueKind.Array)
+    {
+        return 0;
+    }
+
+    return reviewComments.EnumerateArray()
+        .Count(comment => IsCopilotLogin(GetNestedString(comment, "user", "login")));
+}
+
+static bool IsCopilotLogin(string login)
+{
+    return login.Contains("copilot", StringComparison.OrdinalIgnoreCase);
+}
+
+static int? ExtractGeneratedCommentCount(string body)
+{
+    if (string.IsNullOrWhiteSpace(body))
+    {
+        return null;
+    }
+
+    var match = Regex.Match(body, @"generated\s+(\d+)\s+comments?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!match.Success || !int.TryParse(match.Groups[1].Value, out var count))
+    {
+        return null;
+    }
+
+    return count;
+}
+
+static bool IsCopilotSnapshotComplete(CopilotSnapshot snapshot)
+{
+    if (snapshot.ReviewFound)
+    {
+        if (!snapshot.ReviewIsTerminal)
+        {
+            return false;
+        }
+
+        return snapshot.ExpectedInlineCommentCount is null
+            || snapshot.ActualInlineCommentCount >= snapshot.ExpectedInlineCommentCount.Value;
+    }
+
+    return snapshot.ActualInlineCommentCount > 0;
+}
+
+static string ResolveCopilotStatus(CopilotSnapshot snapshot, bool timedOut)
+{
+    if (timedOut)
+    {
+        return "timeout";
+    }
+
+    if (snapshot.ReviewFound && snapshot.ActualInlineCommentCount > 0)
+    {
+        return "reviewAndInline";
+    }
+
+    if (snapshot.ReviewFound)
+    {
+        return "reviewOnly";
+    }
+
+    if (snapshot.ActualInlineCommentCount > 0)
+    {
+        return "inlineOnly";
+    }
+
+    return "none";
+}
+
+static CopilotReviewWaitResult BuildWaitResult(
+    string status,
+    bool timedOut,
+    DateTimeOffset startedAt,
+    DateTimeOffset completedAt,
+    string headRefOid,
+    Options options,
+    CopilotSnapshot snapshot,
+    int stableSamplesObserved)
+{
+    return new CopilotReviewWaitResult(
+        Status: status,
+        TimedOut: timedOut,
+        StartedAt: startedAt,
+        CompletedAt: completedAt,
+        ElapsedSeconds: Math.Round((completedAt - startedAt).TotalSeconds, 3),
+        HeadRefOid: headRefOid,
+        TimeoutSeconds: options.CopilotTimeoutSeconds,
+        PollIntervalSeconds: options.CopilotPollIntervalSeconds,
+        StableSamplesObserved: stableSamplesObserved,
+        ReviewFound: snapshot.ReviewFound,
+        ReviewState: snapshot.ReviewState,
+        ReviewSubmittedAt: snapshot.ReviewSubmittedAt,
+        ExpectedInlineCommentCount: snapshot.ExpectedInlineCommentCount,
+        ActualInlineCommentCount: snapshot.ActualInlineCommentCount);
+}
+
+static DateTimeOffset ParseDateTimeOffset(string value)
+{
+    return DateTimeOffset.TryParse(value, out var parsed) ? parsed : DateTimeOffset.MinValue;
+}
+
+static string FormatNullableNumber(int? value)
+{
+    return value?.ToString() ?? string.Empty;
 }
 
 static bool ContainsCopilot(JsonElement element)
@@ -507,6 +871,13 @@ Options:
   --pr number           Pull request number.
   --out directory       Output directory for review-context.md and review-context.json.
   --include-checks      Include gh pr checks output.
+  --no-wait-for-copilot Disable GitHub Copilot review wait.
+  --copilot-timeout-seconds seconds
+                       Timeout for GitHub Copilot review wait. Default: 180.
+  --copilot-poll-interval-seconds seconds
+                       Poll interval for GitHub Copilot review wait. Default: 10.
+  --copilot-stable-samples count
+                       Required consecutive stable samples. Default: 2.
   --help                Show this help.
 """);
 }
@@ -525,5 +896,73 @@ sealed class Options
 
     public bool IncludeChecks { get; set; }
 
+    public bool WaitForCopilot { get; set; } = true;
+
+    public int CopilotTimeoutSeconds { get; set; } = 180;
+
+    public int CopilotPollIntervalSeconds { get; set; } = 10;
+
+    public int CopilotStableSamples { get; set; } = 2;
+
     public bool ShowHelp { get; set; }
+}
+
+sealed record CollectedPrReviewData(
+    string PrView,
+    string ReviewComments,
+    CopilotReviewWaitResult CopilotReviewWait);
+
+sealed record CopilotReview(
+    string State,
+    string SubmittedAt,
+    string Body,
+    bool CommitMatchesHead,
+    bool CommitIsUnknown,
+    bool IsTerminal);
+
+sealed record CopilotSnapshot(
+    bool ReviewFound,
+    string ReviewState,
+    string ReviewSubmittedAt,
+    string ReviewBody,
+    bool ReviewIsTerminal,
+    int? ExpectedInlineCommentCount,
+    int ActualInlineCommentCount);
+
+sealed record CopilotReviewWaitResult(
+    string Status,
+    bool TimedOut,
+    DateTimeOffset StartedAt,
+    DateTimeOffset CompletedAt,
+    double ElapsedSeconds,
+    string HeadRefOid,
+    int TimeoutSeconds,
+    int PollIntervalSeconds,
+    int StableSamplesObserved,
+    bool ReviewFound,
+    string ReviewState,
+    string ReviewSubmittedAt,
+    int? ExpectedInlineCommentCount,
+    int ActualInlineCommentCount)
+{
+    public Dictionary<string, object?> ToDictionary()
+    {
+        return new Dictionary<string, object?>
+        {
+            ["status"] = Status,
+            ["timedOut"] = TimedOut,
+            ["elapsedSeconds"] = ElapsedSeconds,
+            ["startedAt"] = StartedAt,
+            ["completedAt"] = CompletedAt,
+            ["headRefOid"] = HeadRefOid,
+            ["timeoutSeconds"] = TimeoutSeconds,
+            ["pollIntervalSeconds"] = PollIntervalSeconds,
+            ["reviewFound"] = ReviewFound,
+            ["reviewState"] = ReviewState,
+            ["reviewSubmittedAt"] = ReviewSubmittedAt,
+            ["expectedInlineCommentCount"] = ExpectedInlineCommentCount,
+            ["actualInlineCommentCount"] = ActualInlineCommentCount,
+            ["stableSamplesObserved"] = StableSamplesObserved
+        };
+    }
 }
