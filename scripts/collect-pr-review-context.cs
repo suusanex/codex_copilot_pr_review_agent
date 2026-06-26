@@ -571,7 +571,7 @@ static void AppendChecks(StringBuilder builder, JsonElement? checks)
     {
         foreach (var check in checks.Value.EnumerateArray())
         {
-            builder.AppendLine($"- {GetString(check, "name")}: state={GetString(check, "state")}, conclusion={GetString(check, "conclusion")}, bucket={GetString(check, "bucket")}");
+            builder.AppendLine($"- {GetString(check, "name")}: state={GetString(check, "state")}, bucket={GetString(check, "bucket")}");
         }
     }
 
@@ -636,7 +636,7 @@ static void AddCopilotReviews(List<CopilotReview> reviews, JsonElement prView, s
     foreach (var review in reviewArray.EnumerateArray())
     {
         var author = GetNestedString(review, "author", "login");
-        if (!string.Equals(author, "copilot-pull-request-reviewer", StringComparison.OrdinalIgnoreCase))
+        if (!IsCopilotLogin(author))
         {
             continue;
         }
@@ -669,7 +669,12 @@ static int CountCopilotInlineComments(JsonElement reviewComments)
     }
 
     return reviewComments.EnumerateArray()
-        .Count(comment => string.Equals(GetNestedString(comment, "user", "login"), "Copilot", StringComparison.OrdinalIgnoreCase));
+        .Count(comment => IsCopilotLogin(GetNestedString(comment, "user", "login")));
+}
+
+static bool IsCopilotLogin(string login)
+{
+    return login.Contains("copilot", StringComparison.OrdinalIgnoreCase);
 }
 
 static int? ExtractGeneratedCommentCount(string body)

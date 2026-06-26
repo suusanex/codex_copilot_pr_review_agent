@@ -19,7 +19,7 @@
 
 - Wait status: reviewAndInline / reviewOnly / inlineOnly / none / timeout / disabled
 - Timed out: true / false
-- Wait seconds:
+- Elapsed seconds:
 - Review found: true / false
 - Expected inline comments:
 - Actual inline comments:
